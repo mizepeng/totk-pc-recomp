@@ -245,7 +245,7 @@ unsigned gfx_window_focus_messages(void) { return (unsigned)g_focus_msgs; }
 static const char *present_effective(void) {
     const char *e = cfg_value("TOTK_VK_PRESENT");
     if (!e || !*e) e = "fifo";
-    if (!strcmp(e, "mailbox") && cfg_bool("TOTK_DLSS_FG")) return "fifo";
+    if (!strcmp(e, "mailbox") && vk_dlssg_wanted()) return "fifo";
     return e;
 }
 

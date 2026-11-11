@@ -263,9 +263,12 @@
 # the game renders. Needs dlaa = 1 and nvngx_dlssg.dll from NVIDIA's DLSS SDK next to totk.exe; without them the
 # setting does nothing. Best tried with hdr = 0, a display without VRR (G-SYNC, FreeSync) and vsync on (vk_present = fifo):
 # with HDR on the generated images wash out over bright clouds, and with VRR on they leave in bursts (uneven motion).
-# The images are unevenly spaced with Vulkan and this port does not pace them yet; vsync on evens most of it out.
+# 生成帧按基础帧率分配未来显示时间；fps_limit 仍指真实帧率，60 帧配合 2x 的目标输出为 120 帧。
 # Above 4x the generated images show artifacts. vk_present = mailbox becomes fifo while it is on.
 # Changes while the game runs take effect at once.
+# 目标输出帧率：0 使用手动模式；60～1000 自动选择 1～6 倍，自动调整真实帧率，覆盖 fps_limit。
+# 例如 240 表示尽量输出 240 FPS；倍率上限不足时会在日志中报告。默认关闭。
+# dlss_fg_target = 0
 # dlss_fg = 0
 # Images shown for each game frame with dlss_fg = 1: 2 to 6 (2 generates one image, 6 generates five). Beyond the
 # display's refresh rate the extra images cannot be shown.

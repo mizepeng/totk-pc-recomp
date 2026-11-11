@@ -32,7 +32,7 @@ void perf_set_overlay(int mode) {
     __atomic_store_n(&perf_on, perf_base || mode == 2, __ATOMIC_RELAXED);
 }
 
-int perf_gpu_timing(void) { return (rt_trace & RT_TRACE_PERF) || __atomic_load_n(&overlay, __ATOMIC_RELAXED) == 2; }
+int perf_gpu_timing(void) { return (rt_trace & RT_TRACE_PERF) || __atomic_load_n(&overlay, __ATOMIC_RELAXED) == 2 || cfg_int("TOTK_DLSS_FG_TARGET") > 0; }
 
 static volatile int64_t gpu_busy_total;
 
@@ -266,6 +266,31 @@ static void cpu_placement(void) {
     plat_process_affinity(on ? one : all);
 }
 
+static uint64_t auto_cpu_ns, auto_gpu_ns;
+
+int perf_frame_work(uint64_t *cpu_ns, uint64_t *gpu_ns) {
+    *cpu_ns = __atomic_load_n(&auto_cpu_ns, __ATOMIC_ACQUIRE);
+    *gpu_ns = __atomic_load_n(&auto_gpu_ns, __ATOMIC_ACQUIRE);
+    return *cpu_ns && *gpu_ns;
+}
+
+static void auto_work_sample(uint64_t now, uint64_t interval, uint64_t replay) {
+    static uint64_t start, frames, previous_gpu;
+    if (cfg_int("TOTK_DLSS_FG_TARGET") <= 0 || !interval || interval > 100000000) return;
+    uint64_t waits = frame_ns[PERF_PACE] + frame_ns[PERF_DRAIN];
+    uint64_t work = interval > waits ? interval - waits : 0;
+    if (replay > work) work = replay;
+    uint64_t old = __atomic_load_n(&auto_cpu_ns, __ATOMIC_RELAXED);
+    if (work) __atomic_store_n(&auto_cpu_ns, old ? (old * 15 + work) / 16 : work, __ATOMIC_RELEASE);
+    uint64_t gpu = perf_gpu_busy_total();
+    if (!start) { start = now; previous_gpu = gpu; frames = 0; }
+    frames++;
+    if (now - start >= 250000000) {
+        if (gpu > previous_gpu) __atomic_store_n(&auto_gpu_ns, (gpu - previous_gpu) / frames, __ATOMIC_RELEASE);
+        start = now; previous_gpu = gpu; frames = 0;
+    }
+}
+
 void perf_present(uint64_t frame) {
     static uint64_t last, sum, max, n, win_start, ab_b;
     static int64_t win_prev[PERF_CNT_N];
@@ -274,6 +299,7 @@ void perf_present(uint64_t frame) {
     uint64_t now = kern_now_ns(), d = last ? now - last : 0;
     prof_sampler_frame(frame, now, last ? d : 0);
     uint64_t rep = ft_frame(frame, now, d);   // d is 0 on the first present: it only starts the period
+    auto_work_sample(now, d, rep);
     ab_b += rt_ab();
     cpu_placement();
     if (__atomic_load_n(&overlay, __ATOMIC_RELAXED))   // the overlay's only cost while it is off: this branch

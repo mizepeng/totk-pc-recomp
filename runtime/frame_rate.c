@@ -101,7 +101,9 @@ void frame_step_init(void) {
         step_interval = (_Atomic uint32_t *)((uint8_t *)rt_patch_page() + 8);
         step_store((float)STEP_FIRST_S);
     }
-    frame_limit_live();   // TOTK_FPS_LIMIT decides the set fps60 from the start
+    if (cfg_int("TOTK_DLSS_FG_TARGET") > 0 && !step_word)
+        rt_fatal("frame rate: automatic frame generation requires realtime = 1");
+    frame_limit_live();
     rt_log("frame rate: present interval %s, %s", rt_patch_enabled(fps60) ? "1..3 (above 30 fps)" : "2..3 (shipping 30 fps)",
            step_word ? "real-time step (5-frame average of display intervals, at most 1/15 s)" : "whole-vsync steps");
 }
@@ -143,13 +145,15 @@ static void frame_limit_live(void) {
     if (limit_read && v == limit_seen) return;
     limit_read = 1;
     limit_seen = v;
-    int hz = limit_parse();
+    int automatic = cfg_int("TOTK_DLSS_FG_TARGET") > 0;
+    int hz = automatic ? LIMIT_MAX_HZ : limit_parse();
     if (hz == limit_hz) return;
     limit_hz = hz;
     if (fps60_set == -2) fps60_set = rt_patch_set("fps60");
     if (fps60_set >= 0) rt_patch_switch(fps60_set, hz != 30);
     if ((hz > 60 || hz == 0) && !step_word)
         rt_log("frame rate: limits above 60 need the real-time step (TOTK_REALTIME=1); 60 fps");
+    else if (automatic) rt_log("frame rate: automatic cap for %d FPS output", cfg_int("TOTK_DLSS_FG_TARGET"));
     else if (hz) rt_log("frame rate: limit %d fps", hz);
     else if (gfx_window_refresh_hz() > 0) rt_log("frame rate: limit at the monitor's refresh rate (%.3f Hz now)", gfx_window_refresh_hz());
     else rt_log("frame rate: limit at the monitor's refresh rate (60 until the window measures it)");
@@ -157,6 +161,8 @@ static void frame_limit_live(void) {
 
 uint64_t frame_step_cap_ns(void) {
     frame_limit_live();
+    uint64_t generated = framegen_target_period_ns();
+    if (generated) return generated;
     double hz = limit_hz ? limit_hz : gfx_window_refresh_hz();
     if (hz < LIMIT_MIN_HZ) hz = 60;   // display rate unknown (no window yet)
     if (hz > LIMIT_MAX_HZ) hz = LIMIT_MAX_HZ;
@@ -166,6 +172,8 @@ uint64_t frame_step_cap_ns(void) {
 // The frame rate the limit gives, for the performance overlay: the setting, the monitor's rate for "display", 60 at
 // most without the real-time step; 0 before the first frame read the setting.
 double frame_step_limit_hz(void) {
+    uint64_t generated = framegen_target_period_ns();
+    if (generated) return 1e9 / (double)generated;
     int hz = limit_hz;
     if (hz < 0) return 0;
     double r = hz ? hz : gfx_window_refresh_hz();

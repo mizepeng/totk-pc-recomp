@@ -6,6 +6,8 @@
 // output renders 640 wide, smaller windows less.
 #define DLAA_SCENE_MIN_W 320u
 
+int vk_dlssg_wanted(void);
+unsigned vk_dlssg_multiplier(void);
 int vk_dlaa_wanted(void);   // the setting is on (the device may still lack DLSS)
 // vk_device.c: NGX's instance and device extensions join the lists (room for max names); vk_dlaa_init after the
 // device exists brings NGX up and checks that DLSS is available.

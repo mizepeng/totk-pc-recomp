@@ -26,6 +26,7 @@
 #include "vk_rec.h"
 #include "dlaa_mv_spv.h"
 #include "fg_sky_spv.h"
+#include "framegen_auto.h"
 
 typedef int NgxResult;   // NVSDK_NGX_Result: 1 success, 0xBAD00000 | n failures
 #define NGX_OK(r) (((unsigned)(r) & 0xFFF00000u) != 0xBAD00000u)
@@ -100,6 +101,33 @@ enum { S_P = 0, S_D12, S_D11, S_I, S_U32, S_D, S_F, S_U64, G_P, G_D12, G_D11, G_
 #else
 enum { S_U64 = 0, S_F, S_D, S_U32, S_I, S_D11, S_D12, S_P, G_U64, G_F, G_D, G_U32, G_I, G_D11, G_D12, G_P };
 #endif
+static unsigned auto_multiplier = 2;
+static FramegenAuto auto_control;
+
+static unsigned fg_target(void) {
+    const char *v = cfg_value("TOTK_DLSS_FG_TARGET");
+    char *end;
+    long target = strtol(v, &end, 10);
+    if (*end || (target != 0 && (target < 60 || target > 1000)))
+        rt_fatal("dlssg: dlss_fg_target must be 0 or 60..1000 FPS, got '%s'", v);
+    return (unsigned)target;
+}
+
+int vk_dlssg_wanted(void) { return cfg_bool("TOTK_DLSS_FG") || fg_target() > 0; }
+
+unsigned vk_dlssg_multiplier(void) { return __atomic_load_n(&auto_multiplier, __ATOMIC_ACQUIRE); }
+
+uint64_t framegen_target_period_ns(void) {
+    unsigned target = fg_target();
+    if (!target) return 0;
+    unsigned multiplier = __atomic_load_n(&auto_multiplier, __ATOMIC_ACQUIRE);
+    unsigned minimum = (target + 239) / 240, maximum = target / 30;
+    if (maximum > 6) maximum = 6;
+    if (multiplier < minimum) multiplier = minimum;
+    if (multiplier > maximum) multiplier = maximum;
+    return 1000000000ull * multiplier / target;
+}
+
 static void p_seti(NgxParam *p, const char *n, int v) { ((SetI)p->vt->slot[S_I])(p, n, v); }
 static void p_setu(NgxParam *p, const char *n, unsigned v) { ((SetU)p->vt->slot[S_U32])(p, n, v); }
 static void p_setf(NgxParam *p, const char *n, float v) { ((SetF)p->vt->slot[S_F])(p, n, v); }
@@ -120,7 +148,7 @@ static int p_getp(const NgxParam *p, const char *n, void **v) { return NGX_OK(((
 // dlaa applies after a restart; switched off, nothing else of DLAA runs.
 int vk_dlaa_wanted(void) {
     static int wanted = -1;
-    if (wanted < 0) wanted = cfg_bool("TOTK_DLAA") || cfg_bool("TOTK_DLSS_FG");
+    if (wanted < 0) wanted = cfg_bool("TOTK_DLAA") || vk_dlssg_wanted();
     return wanted;
 }
 
@@ -293,7 +321,8 @@ void vk_dlaa_init(void) {
     rt_log("dlaa_caps: SS.avail=%d SS.driver=%d SS.initResult=%08x (minDriver=%d.%d.%d.%d) | FG.avail=%d FG.driver=%d FG.initResult=%08x",
            ss_avail, ss_driver, (unsigned)ss_init_res, ss_maj, ss_min, ss_bld, ss_sub, fg_avail, fg_driver, (unsigned)fg_init_res);
     N.available = ss_avail == 1;
-    N.fg_available = fg_avail == 1 || ss_avail == 1;
+    N.fg_available = fg_avail == 1;
+    if (fg_target() && !N.fg_available) rt_fatal("dlssg: target mode requested but NVIDIA frame generation is unavailable");
     rt_log("dlaa: NGX up; DLSS %s%s; DLSS-G %s", N.available ? "available" : "NOT available (is " DLSS_MODEL " next to the executable?)",
            ss_driver == 1 ? "; the driver needs an update" : "", N.fg_available ? "available" : "NOT available");
 }
@@ -393,7 +422,7 @@ static struct {
 const VkTexImage *vk_dlaa_swap_img;
 VkImageView vk_dlaa_swap_view;
 
-static int dl_active(void) { return (N.available || N.fg_available) && !D.failed && (D.on || cfg_bool("TOTK_DLSS_FG")); }
+static int dl_active(void) { return (N.available || N.fg_available) && !D.failed && (D.on || vk_dlssg_wanted()); }
 
 static void dl_fail(const char *what, NgxResult r) {
     rt_log("dlaa: %s failed (%08x): DLAA off for this run", what, (unsigned)r);
@@ -1073,6 +1102,9 @@ static struct {
     VkCommandPool pool;
     VkCommandBuffer cb[FG_SLOTS];
     VkFence fence[FG_SLOTS];
+    VkQueryPool auto_queries;
+    unsigned auto_query_frames[FG_SLOTS];
+    uint64_t generated_ns;
     VkImage out[FG_SLOTS][FG_MAX_GEN];
     VmaAllocation out_mem[FG_SLOTS][FG_MAX_GEN];
     VkImageView out_view[FG_SLOTS][FG_MAX_GEN];
@@ -1147,7 +1179,7 @@ static void fg_free_snaps(const VkCtx *c) {
 // an earlier generation still reads from being overwritten (the copy waits for it through the barrier, as both run on
 // the one queue). Does nothing, and costs nothing, while frame generation is off. Returns 0 when there is no copy.
 static int fg_snapshot(VkCommandBuffer cb, VkImage depth, VkFormat dfmt, VkImage mv, uint32_t w, uint32_t h) {
-    if (!cfg_bool("TOTK_DLSS_FG")) return 0;
+    if (!vk_dlssg_wanted()) return 0;
     const VkCtx *c = vk_ctx();
     if (FG.snap_depth[0] && (FG.snap_w != w || FG.snap_h != h || FG.snap_fmt != dfmt)) {
         vkDeviceWaitIdle(c->device);   // another scene size: the old copies may still be read
@@ -1448,7 +1480,7 @@ int vk_dlaa_plan(const VkExec *ex, VkExecJob *j) {
     // capture for frame generation is made, once per frame, and only while frame generation is on.
     if (D.gbuf && D.ended && !D.armed && !D.fg_late && ex->pass_ncolor == 1 && c->image && scene_color(c->format) && z->image &&
         z->format == VK_FORMAT_D32_SFLOAT && c->width == z->width && c->height == z->height && c->width >= DLAA_SCENE_MIN_W &&
-        c->width >= D.gbuf_w && c->samples <= 1 && !c->is3d && cfg_bool("TOTK_DLSS_FG")) {
+        c->width >= D.gbuf_w && c->samples <= 1 && !c->is3d && vk_dlssg_wanted()) {
         D.color = *c, D.depth = *z, D.fg_late = 1;
         *j = (VkExecJob){.kind = VK_JOB_FG_CAPTURE};
         return 1;
@@ -1561,7 +1593,7 @@ void vk_dlaa_frame(void) {
     vk_dlaa_swap_img = NULL, vk_dlaa_swap_view = VK_NULL_HANDLE;
     dlss_mode();
     preset_check();
-    int on = N.available && (cfg_bool("TOTK_DLAA") || cfg_bool("TOTK_DLSS_FG"));
+    int on = N.available && (cfg_bool("TOTK_DLAA") || vk_dlssg_wanted());
     if (on != D.on) {
         rt_log("dlaa: %s", on ? "on" : "off");
         D.on = on;
@@ -1748,6 +1780,7 @@ void vk_dlssg_release(void) {
     if (FG.params && N.destroy_params) N.destroy_params(FG.params), FG.params = NULL;
     for (int i = 0; i < FG_SLOTS; i++)
         if (FG.fence[i]) vkDestroyFence(c->device, FG.fence[i], NULL), FG.fence[i] = VK_NULL_HANDLE;
+    if (FG.auto_queries) vkDestroyQueryPool(c->device, FG.auto_queries, NULL);
     if (FG.pool) vkDestroyCommandPool(c->device, FG.pool, NULL), FG.pool = VK_NULL_HANDLE;
     if (FG.timeline_sem) vkDestroySemaphore(c->device, FG.timeline_sem, NULL), FG.timeline_sem = VK_NULL_HANDLE;
     if (FG.sky_pipe) vkDestroyPipeline(c->device, FG.sky_pipe, NULL);
@@ -1822,6 +1855,7 @@ static void fg_sky_stamp(VkCommandBuffer cb, uint32_t slot, int g, uint32_t ow, 
 
 // Generated frames for the fixed multiplier. 2x is 1 ... 6x is 5. Anything else stays 2x.
 static int fg_gens(void) {
+    if (fg_target()) return (int)__atomic_load_n(&auto_multiplier, __ATOMIC_ACQUIRE) - 1;
     const char *v = cfg_value("TOTK_DLSS_FG_X");
     if (v && !strcmp(v, "3")) return 2;
     if (v && !strcmp(v, "4")) return 3;
@@ -1840,7 +1874,9 @@ static float fg_camera_far(const float *cr) {
 int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh, VkImage *out_interps, int out_cap) {
     if (out_cap > 0 && out_interps) out_interps[0] = VK_NULL_HANDLE;
     if (!out_interps || out_cap < 1) return 0;
-    int want = N.fg_available && !FG.failed && cfg_bool("TOTK_DLSS_FG");
+    if (fg_target() && (!N.fg_available || FG.failed))
+        rt_fatal("dlssg: requested target mode cannot generate frames; check the preceding NVIDIA error");
+    int want = N.fg_available && !FG.failed && vk_dlssg_wanted();
     if (want != FG.on) {
         rt_log("dlssg: %s", want ? "on" : "off");
         FG.on = want;
@@ -1904,26 +1940,71 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
         rt_log("dlssg: fence wait timed out");
         return 0;
     }
+    unsigned target = fg_target();
+    if (target && !FG.auto_queries) {
+        uint32_t count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(c->phys, &count, NULL);
+        VkQueueFamilyProperties *families = calloc(count, sizeof *families);
+        if (!families) rt_fatal("dlssg: cannot allocate queue properties for target mode");
+        vkGetPhysicalDeviceQueueFamilyProperties(c->phys, &count, families);
+        int valid = c->gfx_family < count && families[c->gfx_family].timestampValidBits == 64;
+        free(families);
+        if (!valid || c->props.limits.timestampPeriod <= 0)
+            rt_fatal("dlssg: target mode requires 64-bit GPU timestamps");
+        VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                                   .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 2 * FG_SLOTS};
+        if (vkCreateQueryPool(c->device, &qi, NULL, &FG.auto_queries) != VK_SUCCESS)
+            rt_fatal("dlssg: cannot create GPU timing queries for target mode");
+    }
+    if (FG.auto_queries && FG.auto_query_frames[slot]) {
+        uint64_t times[2];
+        if (vkGetQueryPoolResults(c->device, FG.auto_queries, slot * 2, 2, sizeof times, times, sizeof(uint64_t),
+                                 VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+            rt_fatal("dlssg: completed frame has no GPU timing results");
+        uint64_t sample = (uint64_t)((times[1] - times[0]) * c->props.limits.timestampPeriod / FG.auto_query_frames[slot]);
+        FG.generated_ns = FG.generated_ns ? (FG.generated_ns * 7 + sample) / 8 : sample;
+        FG.auto_query_frames[slot] = 0;
+    }
+    if (target) {
+        uint64_t cpu = 0, gpu = 0;
+        perf_frame_work(&cpu, &gpu);
+        unsigned before = __atomic_load_n(&auto_multiplier, __ATOMIC_RELAXED);
+        unsigned multiplier = framegen_auto_update(&auto_control, kern_now_ns(), target, cpu, gpu, FG.generated_ns);
+        __atomic_store_n(&auto_multiplier, multiplier, __ATOMIC_RELEASE);
+        static unsigned logged_target;
+        static int logged_limited = -1;
+        if (before != multiplier || target != logged_target || logged_limited != auto_control.limited) {
+            rt_log("dlssg: auto target %u FPS, x%u, CPU %.2f ms, GPU %.2f ms, generated %.2f ms%s",
+                   target, multiplier, cpu / 1e6, gpu / 1e6, FG.generated_ns / 1e6,
+                   auto_control.limited ? "; workload exceeds the target at the multiplier limit" : "");
+            logged_target = target;
+            logged_limited = auto_control.limited;
+        }
+    }
+    int gens = fg_gens();
+    if (gens > out_cap || gens > FG_MAX_GEN || gens < 0)
+        rt_fatal("dlssg: invalid requested generated frame count %d", gens);
+    if (!gens) return 0;
+    unsigned capacity = target ? FG_MAX_GEN : (unsigned)gens;
     vkResetFences(c->device, 1, &FG.fence[slot]);
     VkCommandBuffer cb = FG.cb[slot];
     vkResetCommandBuffer(cb, 0);
     VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
     vkBeginCommandBuffer(cb, &bi);
-
+    if (target) {
+        vkCmdResetQueryPool(cb, FG.auto_queries, slot * 2, 2);
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, FG.auto_queries, slot * 2);
+    }
     uint32_t sw = D.fg_w, sh = D.fg_h;
-    if (!sw || !sh) sw = ow, sh = oh;
-    int gens = fg_gens();
-    if (gens > out_cap) gens = out_cap;
-    if (gens > FG_MAX_GEN) gens = FG_MAX_GEN;
-    if (gens < 1) gens = 1;
+    if (!sw || !sh) rt_fatal("dlssg: a captured scene has no dimensions");
     static int logged_gens;
-    if (gens != logged_gens) {
+    if (!target && gens != logged_gens) {
         logged_gens = gens;
         rt_log("dlssg: fixed multiplier %dx", gens + 1);
     }
 
-    if (FG.feat && (FG.ow != ow || FG.oh != oh || FG.fmt != fmt || FG.created_max < (uint32_t)gens)) {
+    if (FG.feat && (FG.ow != ow || FG.oh != oh || FG.fmt != fmt || FG.created_max < capacity)) {
         vk_queue_lock();
         vkDeviceWaitIdle(c->device);
         vk_queue_unlock();
@@ -1938,7 +2019,7 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
         VkImageMemoryBarrier2 ib[FG_SLOTS * FG_MAX_GEN];
         int nb = 0;
         for (int i = 0; i < FG_SLOTS; i++) {
-            for (int g = 0; g < gens; g++) {
+            for (unsigned g = 0; g < capacity; g++) {
                 if (FG.out[i][g]) continue;
                 if (!image2d(ow, oh, fmt, u, &FG.out[i][g], &FG.out_mem[i][g], &FG.out_view[i][g])) {
                     rt_log("dlssg: output image (%ux%u fmt %d) creation failed: DLSS-G off", ow, oh, (int)fmt);
@@ -1993,7 +2074,7 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
         p_setu(p, "DLSSG.MaxDynamicWidth", ow > sw ? ow : sw);
         p_setu(p, "DLSSG.MaxDynamicHeight", oh > sh ? oh : sh);
         p_setu(p, "DLSSG.BackbufferFormat", (unsigned)fmt);
-        p_setu(p, "DLSSG.MultiFrameCountMax", (unsigned)gens);
+        p_setu(p, "DLSSG.MultiFrameCountMax", capacity);
         p_seti(p, "DLSSG.DynamicResolution", 0);
         p_setu(p, "DLSSG.BackbufferSubrectWidth", ow);
         p_setu(p, "DLSSG.BackbufferSubrectHeight", oh);
@@ -2026,11 +2107,11 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
             return 0;
         }
         FG.reset = 1;
-        FG.created_max = (uint32_t)gens;
+        FG.created_max = capacity;
         FG.sw = sw, FG.sh = sh;
         FG.internal_w = sw, FG.internal_h = sh;
-        rt_log("dlssg: DLSS-G feature created at %ux%u (format %d, scene %ux%u, max generated %d)",
-               ow, oh, (int)fmt, sw, sh, gens);
+        rt_log("dlssg: DLSS-G feature created at %ux%u (format %d, scene %ux%u, max generated %u)",
+               ow, oh, (int)fmt, sw, sh, capacity);
     }
 
     if (FG.bb_img[slot] != backbuffer || FG.bb_fmt[slot] != fmt || !FG.bb_view[slot]) {
@@ -2241,6 +2322,10 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
         if (g + 1 < gens) full_barrier(cb);
     }
     full_barrier(cb);
+    if (target) {
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, FG.auto_queries, slot * 2 + 1);
+        FG.auto_query_frames[slot] = (unsigned)gens;
+    }
     vkEndCommandBuffer(cb);
 
     VkCommandBufferSubmitInfo cbi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = cb};

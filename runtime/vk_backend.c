@@ -23,6 +23,7 @@
 
 #include "cfg.h"
 #include "flight.h"
+#include "framegen_pacing.h"
 #include "gfx.h"
 #include "host.h"
 #include "nvn_api.h"
@@ -57,6 +58,7 @@ static void present_main(void *arg) {
     (void)arg;
     perf_core_thread(PCORE_PRESENT);
     uint64_t last = 0, last_queued = 0;
+    uint64_t fg_next = 0, last_output = 0;
     plat_mutex_lock(&pl);
     for (;;) {
         while (!pending) plat_cond_wait(&pcv, &pl);
@@ -65,16 +67,27 @@ static void present_main(void *arg) {
         busy = 1;
         plat_cond_broadcast(&pcv);
         plat_mutex_unlock(&pl);
+        uint64_t real_at = j.at;
         if (j.interp_n > 0) {
-            uint64_t span = last && j.at > last ? j.at - last : 0;
+            uint64_t period = frame_step_cap_ns();
+            FramegenPacing plan = framegen_pacing(kern_now_ns(), j.at, period, (unsigned)j.interp_n, fg_next);
+            fg_next = plan.next;
+            real_at = plan.real;
             for (int i = 0; i < j.interp_n; i++) {
-                if (!j.interp[i]) continue;
-                // 2x lands on the old midpoint. 3x and 4x split the same interval.
-                uint64_t at = span ? last + span * (uint64_t)(i + 1) / (uint64_t)(j.interp_n + 1) : 0;
+                if (!j.interp[i]) rt_fatal("dlssg: generated image %d of %d is missing", i + 1, j.interp_n);
+                uint64_t at = plan.first + period * (uint64_t)i / (uint64_t)(j.interp_n + 1);
                 vk_present_blit(j.interp[i], VK_IMAGE_LAYOUT_GENERAL, j.format, j.w, j.h, j.has_crop ? j.crop : NULL);
-                if (at) wait_until(at);
+                wait_until(at);
+                uint64_t submitted = kern_now_ns();
                 vk_present_flip();
+                if (rt_trace & RT_TRACE_PRESENT)
+                    rt_log("present-fg: frame %llu generated %d/%d interval %.3f ms, %.3f ms past target",
+                           (unsigned long long)j.frame, i + 1, j.interp_n,
+                           last_output ? (submitted - last_output) / 1e6 : 0.0, submitted > at ? (submitted - at) / 1e6 : 0.0);
+                last_output = submitted;
             }
+        } else {
+            fg_next = 0;
         }
         if (flight_on) vk_thumbs_frame(j.frame);
         vk_present_blit(j.image, VK_IMAGE_LAYOUT_GENERAL, j.format, j.w, j.h, j.has_crop ? j.crop : NULL);
@@ -87,16 +100,21 @@ static void present_main(void *arg) {
         plat_cond_broadcast(&pcv);
         plat_mutex_unlock(&pl);
         uint64_t t0 = kern_now_ns();
-        wait_until(j.at);
+        wait_until(real_at);
         uint64_t t1 = kern_now_ns();
         vk_present_flip();
+        if (j.interp_n > 0 && (rt_trace & RT_TRACE_PRESENT))
+            rt_log("present-fg: frame %llu real interval %.3f ms, %.3f ms past target",
+                   (unsigned long long)j.frame, last_output ? (t1 - last_output) / 1e6 : 0.0,
+                   t1 > real_at ? (t1 - real_at) / 1e6 : 0.0);
+        last_output = t1;
         // TOTK_TRACE=present: one line per present: the host present's interval, the interval of the game's present
         // calls (when the host present went out before back-edge pacing), the wait and how far past its target it went
         if (rt_trace & RT_TRACE_PRESENT)
             rt_log("present: frame %llu interval %.3f ms, game %.3f ms, waited %.3f ms, %.3f ms past target",
                    (unsigned long long)j.frame, last ? (t1 - last) / 1e6 : 0.0,
                    last_queued ? (j.queued - last_queued) / 1e6 : 0.0, (t1 - t0) / 1e6,
-                   j.at && t1 > j.at ? (t1 - j.at) / 1e6 : 0.0);
+                   real_at && t1 > real_at ? (t1 - real_at) / 1e6 : 0.0);
         last = t1;
         last_queued = j.queued;
         vk_pipeline_autosave();   // starts the autosave thread once
