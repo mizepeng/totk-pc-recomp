@@ -27,6 +27,7 @@
 #include "dlaa_mv_spv.h"
 #include "fg_sky_spv.h"
 #include "framegen_auto.h"
+#include "framegen_input.h"
 
 typedef int NgxResult;   // NVSDK_NGX_Result: 1 success, 0xBAD00000 | n failures
 #define NGX_OK(r) (((unsigned)(r) & 0xFFF00000u) != 0xBAD00000u)
@@ -88,10 +89,12 @@ static struct {
 
 typedef void (*SetI)(NgxParam *, const char *, int);
 typedef void (*SetU)(NgxParam *, const char *, unsigned);
+typedef void (*SetU64)(NgxParam *, const char *, unsigned long long);
 typedef void (*SetF)(NgxParam *, const char *, float);
 typedef void (*SetP)(NgxParam *, const char *, void *);
 typedef NgxResult (*GetI)(const NgxParam *, const char *, int *);
 typedef NgxResult (*GetU)(const NgxParam *, const char *, unsigned *);
+typedef NgxResult (*GetU64)(const NgxParam *, const char *, unsigned long long *);
 typedef NgxResult (*GetF)(const NgxParam *, const char *, float *);
 typedef NgxResult (*GetP)(const NgxParam *, const char *, void **);
 // The SDK declares Set(u64), Set(float), Set(double), Set(u32), Set(int), Set(ID3D11Resource *), Set(ID3D12Resource *),
@@ -131,10 +134,12 @@ uint64_t framegen_target_period_ns(void) {
 
 static void p_seti(NgxParam *p, const char *n, int v) { ((SetI)p->vt->slot[S_I])(p, n, v); }
 static void p_setu(NgxParam *p, const char *n, unsigned v) { ((SetU)p->vt->slot[S_U32])(p, n, v); }
+static void p_setu64(NgxParam *p, const char *n, unsigned long long v) { ((SetU64)p->vt->slot[S_U64])(p, n, v); }
 static void p_setf(NgxParam *p, const char *n, float v) { ((SetF)p->vt->slot[S_F])(p, n, v); }
 static void p_setp(NgxParam *p, const char *n, void *v) { ((SetP)p->vt->slot[S_P])(p, n, v); }
 static int p_geti(const NgxParam *p, const char *n, int *v) { return NGX_OK(((GetI)p->vt->slot[G_I])(p, n, v)); }
 static int p_getu(const NgxParam *p, const char *n, unsigned *v) { return NGX_OK(((GetU)p->vt->slot[G_U32])(p, n, v)); }
+static int p_getu64(const NgxParam *p, const char *n, unsigned long long *v) { return NGX_OK(((GetU64)p->vt->slot[G_U64])(p, n, v)); }
 static int p_getf(const NgxParam *p, const char *n, float *v) { return NGX_OK(((GetF)p->vt->slot[G_F])(p, n, v)); }
 static int p_getp(const NgxParam *p, const char *n, void **v) { return NGX_OK(((GetP)p->vt->slot[G_P])(p, n, v)); }
 
@@ -259,16 +264,19 @@ static int vtable_ok(void) {
     if (!NGX_OK(N.alloc_params(&p)) || !p) return 0;
     int i = 0;
     unsigned u = 0;
+    unsigned long long u64 = 0;
     float f = 0;
     void *v = NULL;
     p_seti(p, "TotK.Test.I", -12345);
     p_setu(p, "TotK.Test.U", 4000000000u);
+    p_setu64(p, "TotK.Test.U64", 0x12345678abcdef01ull);
     p_setf(p, "TotK.Test.F", 1.25f);
     p_setp(p, "TotK.Test.P", (void *)p);
     int ok = p_geti(p, "TotK.Test.I", &i) && i == -12345 && p_getu(p, "TotK.Test.U", &u) && u == 4000000000u &&
-             p_getf(p, "TotK.Test.F", &f) && f == 1.25f && p_getp(p, "TotK.Test.P", &v) && v == (void *)p;
+             p_getf(p, "TotK.Test.F", &f) && f == 1.25f &&
+             p_getu64(p, "TotK.Test.U64", &u64) && u64 == 0x12345678abcdef01ull && p_getp(p, "TotK.Test.P", &v) && v == (void *)p;
     if (N.destroy_params) N.destroy_params(p);
-    if (!ok) rt_log("dlaa: NGX parameter layout check failed (i=%d u=%u f=%g p=%p): DLAA off", i, u, f, v);
+    if (!ok) rt_log("dlaa: NGX parameter layout check failed (i=%d u=%u u64=%llu f=%g p=%p): DLAA off", i, u, u64, f, v);
     return ok;
 }
 
@@ -1127,7 +1135,7 @@ static struct {
     VkFormat snap_fmt;
 
     uint32_t slot;
-    uint64_t evals, ready_count, missed_scene;
+    uint64_t evals, ready_count, missed_scene, last_evaluated_frame;
     VkDescriptorSetLayout sky_dsl;
     VkPipelineLayout sky_layout;
     VkPipeline sky_pipe;
@@ -1874,7 +1882,7 @@ static float fg_camera_far(const float *cr) {
     return far;
 }
 
-int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh, VkImage *out_interps, int out_cap) {
+int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh, uint64_t frame, VkImage *out_interps, int out_cap) {
     if (out_cap > 0 && out_interps) out_interps[0] = VK_NULL_HANDLE;
     if (!out_interps || out_cap < 1) return 0;
     if (vk_dlssg_wanted() && fg_target() && (!N.fg_available || FG.failed))
@@ -1896,6 +1904,7 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
                    (unsigned long long)FG.missed_scene, D.fg_scene_ok, D.fg_cam_ok,
                    (void *)D.fg_depth, (void *)D.fg_mv);
         FG.reset = 1;
+        FG.cam_prev_ok = 0;
         D.fg_scene_ok = 0;
         return 0;
     }
@@ -1903,6 +1912,8 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
     // game drew no scene for it) would be warped with the depth and vectors of an earlier frame, and the generated
     // images would shift by the motion of that frame.
     if (FG.snap_seen == FG.snap_n) {
+        FG.reset = 1;
+        FG.cam_prev_ok = 0;
         FG.stale++;
         return 0;
     }
@@ -2129,10 +2140,8 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
         FG.bb_img[slot] = backbuffer, FG.bb_fmt[slot] = fmt;
     }
 
-    // Scene-resolution depth and vectors, the same images DLSS SR samples.
-    // A nearest blit down to 1920x1080 shifted thin texels onto the background.
-    // The shader does not dilate, and it subtracts the jitter, so both flags stay off.
-    // Scale stays 1, the same MV.Scale SR uses for these pixel vectors.
+    // 深度和矢量保持场景分辨率；DLSS-G 的 MvecScale 与 DLSS SR 的像素倍率不同。
+    // 按 NVIDIA DLSS nvsdk_ngx_defs_dlssg.h 的约定，在提交参数时归一化，而不改动共享的矢量图。
     FG.internal_w = sw;
     FG.internal_h = sh;
 
@@ -2141,7 +2150,11 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
     NgxResourceVK r_depth = res_image(D.fg_depth_view, D.fg_depth, D.fg_depth_fmt, sw, sh, VK_IMAGE_ASPECT_DEPTH_BIT, 0);
     NgxResourceVK r_mvec = res_image(D.fg_mv_view, D.fg_mv, VK_FORMAT_R16G16_SFLOAT, sw, sh, VK_IMAGE_ASPECT_COLOR_BIT, 0);
 
-    int reset = FG.reset || D.fg_reset;
+    FramegenInput input;
+    if (!framegen_input(sw, sh, frame, FG.last_evaluated_frame, FG.reset || D.fg_reset, &input))
+        rt_fatal("dlssg: invalid scene dimensions or real frame identity");
+    int reset = input.reset;
+    if (reset) FG.cam_prev_ok = 0;
     // Leave fg_scene_ok set. This runs on the present thread while the next
     // frame's DLSS evaluate may already have stored a new one.
     FG.reset = 0, D.fg_reset = 0;
@@ -2179,6 +2192,7 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
     p_seti(p, "DLSSG.IsRecording", 1);
     p_seti(p, "DLSSG.EnableInterp", 1);
     p_setu(p, "DLSSG.MultiFrameCount", (unsigned)gens);
+    p_setu64(p, "DLSSG.BackbufferFrameID", frame);
     p_seti(p, "DLSSG.AutomodeOverrideReset", 0);
     p_seti(p, "DLSSG.NotRenderingGameFrames", 0);
     p_seti(p, "DLSSG.DepthInverted", 1);
@@ -2190,12 +2204,14 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
     p_seti(p, "DLSSG.InvertYAxis", 0);
     p_setf(p, "DLSSG.JitterOffsetX", D.fg_jx);
     p_setf(p, "DLSSG.JitterOffsetY", D.fg_jy);
-    p_setf(p, "DLSSG.MvecScaleX", 1.0f);
-    p_setf(p, "DLSSG.MvecScaleY", 1.0f);
-    p_setf(p, "DLSSG.MvecInvalidValue", 0.0f);
+    p_setf(p, "DLSSG.MvecScaleX", input.scale_x);
+    p_setf(p, "DLSSG.MvecScaleY", input.scale_y);
+    // 零位移是合法静止像素；FLT_MAX 不可能出现在 RG16F 图中，用作明确的无效值哨兵。
+    p_setf(p, "DLSSG.MvecInvalidValue", input.invalid_motion);
     p_seti(p, "DLSSG.MvecDilated", 0);
     p_seti(p, "DLSSG.MvecJittered", 0);
-    p_setf(p, "DLSSG.MinRelativeLinearDepthObjectSeparation", 0.001f);
+    // NVIDIA DLSS nvsdk_ngx_params_dlssg.h 的默认分隔值为 40；不采用未经验证的极小分隔阈值。
+    p_setf(p, "DLSSG.MinRelativeLinearDepthObjectSeparation", 40.0f);
     p_seti(p, "DLSSG.is_constants_valid", 0);
 
     // Subrect dimensions for Depth, MVecs and Backbuffer
@@ -2346,6 +2362,8 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
         if (err_count++ < 8) rt_log("dlssg: EvaluateFeature returned %08x (ready=%d)", (unsigned)r, ready);
         return 0;
     }
+    if (NGX_OK(r)) FG.last_evaluated_frame = frame;
+    else { FG.reset = 1; FG.cam_prev_ok = 0; }
     FG.evals++;
     if (FG.evals == 1 || FG.evals == 120 || FG.evals % 1800 == 0)
         rt_log("dlssg: %llu evaluations, %llu interpolated frames ready (%ux%u, scene %ux%u, %llu missed scene, %llu presents without a new scene, x%d)",

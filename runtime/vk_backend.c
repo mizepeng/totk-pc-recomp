@@ -163,7 +163,7 @@ static void present_image(const tex_t *t, const int crop[4], uint64_t at_ns, uin
     }
     vk_upload_flush(0);   // an upload vk_texture_get just recorded goes before the blit
     if (!menu_is_open())
-        j.interp_n = vk_dlssg_evaluate(j.image, j.format, (uint32_t)j.w, (uint32_t)j.h, j.interp, VK_DLSSG_MAX_GEN);
+        j.interp_n = vk_dlssg_evaluate(j.image, j.format, (uint32_t)j.w, (uint32_t)j.h, j.frame, j.interp, VK_DLSSG_MAX_GEN);
     vk_dlaa_frame();
     plat_mutex_lock(&pl);
     if (!present_thread) {

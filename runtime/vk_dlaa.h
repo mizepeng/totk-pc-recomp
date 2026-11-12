@@ -62,5 +62,5 @@ int vk_dlaa_skip_draw(VkExec *ex, const GfxShader *fs);
 // first, and returns how many are ready to present before the real frame.
 #define VK_DLSSG_MAX_GEN 5
 int vk_dlssg_available(void);
-int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh, VkImage *out_interps, int out_cap);
+int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh, uint64_t frame, VkImage *out_interps, int out_cap);
 void vk_dlssg_release(void);
