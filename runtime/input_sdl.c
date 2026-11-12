@@ -33,8 +33,6 @@ static volatile int32_t captured;             // relative mouse mode is on
 // ptr_have is 0 whenever the pointer is not over the window, as the Win32 back end's client-rect test.
 static volatile uint64_t ptr_pos;
 static volatile int32_t ptr_have;
-static volatile int32_t warp_pending;         // ikb_pointer_set asked the window thread to move the pointer
-static float warp_nx, warp_ny;                // its target, read by the window thread once warp_pending is seen
 enum { CUR_REL = 1, CUR_ESC = 2 };            // as input_win.c: released by Esc or a click elsewhere; by Esc
 static volatile int32_t cur_rel, cur_suspend, cur_pending;
 static uint32_t wake_event;                   // SDL_RegisterEvents: wakes the window thread for a cursor change
@@ -163,21 +161,6 @@ static void pointer_store(float x, float y) {
     __atomic_store_n(&ptr_have, 1, __ATOMIC_RELEASE);
 }
 
-// A warp asked for by ikb_pointer_set, done here as every window call: on the window thread, and after the cursor
-// change of the same menu opening has been applied. SDL's warp makes a motion event where it works (X11); where it
-// does not (some Wayland compositors) the stored place stands, so the item under the pointer is the place asked for
-// even if the visible cursor stayed behind.
-static void pointer_apply(void) {
-    if (!plat_xchg32(&warp_pending, 0)) return;
-    if (!win || !focused) return;
-    int w = 0, h = 0;
-    SDL_GetWindowSize(win, &w, &h);
-    if (w < 1 || h < 1) return;
-    float x = warp_nx * w, y = warp_ny * h;
-    SDL_WarpMouseInWindow(win, x, y);
-    pointer_store(x, y);
-}
-
 // Any thread: the window thread applies the change at its next event.
 void ikb_cursor_update(void) {
     plat_xchg32(&cur_pending, 1);
@@ -209,7 +192,6 @@ void input_sdl_window(SDL_Window *w) {
 
 void input_sdl_idle(void) {
     if (cur_pending) cursor_apply();
-    pointer_apply();
 }
 
 void input_sdl_event(const SDL_Event *e) {
@@ -284,7 +266,6 @@ void input_sdl_event(const SDL_Event *e) {
         break;
     }
     cursor_apply();
-    pointer_apply();   // after cursor_apply: a menu opening uncaptures first, then the pointer moves to its middle
 }
 
 // ---- input_wsys.h
@@ -302,18 +283,6 @@ int ikb_pointer(float *nx, float *ny) {
     *nx = (float)(uint32_t)(p >> 32) / 4294967295.0f;
     *ny = (float)(uint32_t)p / 4294967295.0f;
     return 1;
-}
-
-// Moves the pointer there (menu_cursor.c: to the middle when a menu opens). The window thread warps at its next
-// event, as SDL asks for its video thread; until then the warp target stands as the pointer's place.
-void ikb_pointer_set(float nx, float ny) {
-    if (!(nx >= 0 && nx <= 1) || !(ny >= 0 && ny <= 1)) return;
-    warp_nx = nx, warp_ny = ny;
-    __atomic_store_n(&warp_pending, 1, __ATOMIC_RELEASE);
-    if (wake_event) {
-        SDL_Event e = {.user = {.type = wake_event}};
-        SDL_PushEvent(&e);
-    }
 }
 
 uint32_t ikb_mouse_travel(void) { return (uint32_t)__atomic_load_n(&mouse_travel, __ATOMIC_RELAXED); }

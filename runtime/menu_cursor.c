@@ -292,8 +292,8 @@ static int enabled(void) {
 
 static void set_pointer(int on) {
     if (plat_xchg32(&g_pointer, on) == on) return;
+    // 菜单只切换指针显示和捕获状态，保留用户的鼠标坐标。
     ikb_cursor_update();
-    if (on) ikb_pointer_set(0.5f, 0.5f);   // the pointer appears in the middle, not where the capture left it
 }
 
 // The pointer on the game's picture, 0..1 from its top left (the present's fit, letterbox or pillarbox)
@@ -340,8 +340,7 @@ void menu_cursor_poll(uint64_t *buttons) {
     // Moving the mouse (or a key) makes keyboard and mouse the last device and the pointer comes.
     int menu = f.screen && !gameplay_screen(nm) && ikb_foreground() && input_kbm_last();
     if (menu) menu_seen = now;
-    // A menu's focus gap (a tab switch, a popup opening: no focus box for a frame or two) keeps the pointer where it
-    // is, for up to 300 ms: releasing it there captured it again and centred it when the next tab took the focus
+    // 标签切换或弹窗期间短暂无焦点时，继续显示指针，避免反复进入镜头捕获状态。
     int gap = !menu && !f.screen && menu_seen && now - menu_seen < 300 && ikb_foreground() && input_kbm_last();
     set_pointer(menu || gap);
     int l = ikb_down(KEY_MOUSE_L), r = ikb_down(KEY_MOUSE_R);
