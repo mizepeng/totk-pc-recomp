@@ -168,7 +168,11 @@ static void layout_name(uint64_t scr, char *out, size_t n) {
 // background (Weeping of the Empire's engine/runtime/totk_menu_cursor.cpp census tells them apart the same way).
 // TOTK_MENU_CURSOR_LOG=1 logs the open screens whenever the set changes.
 enum { SM_COUNT = 0x8, SM_SCREENS = 0x10 };
-static int map_open(void) {
+static int gameplay_screen(const char *nm);
+static int screen_has_buttons(uint64_t scr);
+
+static int map_open(int *pointer_menu) {
+    if (pointer_menu) *pointer_menu = 0;
     uint64_t sm = screen_mgr();
     if (!sm) return 0;
     int32_t n = (int32_t)rd32(sm + SM_COUNT);
@@ -187,6 +191,7 @@ static int map_open(void) {
         pad |= !strcmp(nm, "AppMenuOverlay_00");
         map |= !strcmp(nm, "AppMap_00");
         bg |= !strcmp(nm, "AppMenuBG_00");
+        if (pointer_menu && !*pointer_menu && !gameplay_screen(nm) && screen_has_buttons(scr)) *pointer_menu = 1;
         if (!verbose) continue;
         for (const char *c = nm; *c; c++) h = (h ^ (uint8_t)*c) * 1099511628211ull;
         if (len < sizeof list - 64) len += (size_t)snprintf(list + len, sizeof list - len, "%s%s", len ? " " : "", nm);
@@ -224,6 +229,15 @@ static uint64_t root_pane(uint64_t btn) {
     uint64_t blyt = rd64(btn + BTN_LAYOUT);
     return ok_at(blyt, LYT_ROOT + 8) ? rd64(blyt + LYT_ROOT) : 0;
 }
+// 焦点在标签或弹窗之间转移时，以仍打开的可操作菜单判断指针归属。
+static int screen_has_buttons(uint64_t scr) {
+    uint64_t nodes[MAX_NODES], buttons[MAX_NODES];
+    int count = nodes_of(scr, nodes, buttons);
+    for (int i = 0; i < count; i++)
+        if (usable(buttons[i]) && pane_shown(root_pane(buttons[i]))) return 1;
+    return 0;
+}
+
 // Every usable node's shown hit pane lies off the visible layout: the hit panes are stale (TotK never uses touch;
 // the dialogue choices' sit far from where the choices are drawn), so the buttons' own parts panes stand for them
 static int stale_hit_panes(int n, const uint64_t *btn, float lw, float lh, const Xf *t) {
@@ -329,19 +343,27 @@ void menu_cursor_poll(uint64_t *buttons) {
     Focus f = focus_now();
     char nm[48] = "";
     if (f.screen) layout_name(f.screen, nm, sizeof nm);
-    // The open screens are scanned every 100 ms, not at every pad read: each screen costs memory queries
     uint64_t now = plat_now_ms();
+    int mouse_active = ikb_foreground() && input_kbm_last();
+    int menu = f.screen && !gameplay_screen(nm) && mouse_active;
+    if (menu) menu_seen = now;
     static uint64_t map_at;
-    static int map, map_logged;
-    if (!map_at || now - map_at >= 100) map_at = now, map = map_open();
+    static int map, map_logged, open_menu, scanning_menu;
+    int keep_pointer = mouse_active && !menu && menu_cursor_pointer();
+    // 只在已显示的菜单指针失去焦点时额外检查按钮；首次失焦立即检查，之后每 100 毫秒更新。
+    if (!map_at || now - map_at >= 100 || (keep_pointer && !scanning_menu)) {
+        map_at = now;
+        open_menu = 0;
+        map = map_open(keep_pointer ? &open_menu : NULL);
+        scanning_menu = keep_pointer;
+    }
+    if (!keep_pointer) scanning_menu = 0;
+    if (keep_pointer && open_menu) menu_seen = now;
     if (map && !map_logged) map_logged = 1, rt_log("menu_cursor: the map is open: the mouse moves its cursor");
     __atomic_store_n(&g_map, map, __ATOMIC_RELAXED);
-    // With the gamepad as the last device the menus stay as they are on the console: no pointer, the capture kept.
-    // Moving the mouse (or a key) makes keyboard and mouse the last device and the pointer comes.
-    int menu = f.screen && !gameplay_screen(nm) && ikb_foreground() && input_kbm_last();
-    if (menu) menu_seen = now;
-    // 标签切换或弹窗期间短暂无焦点时，继续显示指针，避免反复进入镜头捕获状态。
-    int gap = !menu && !f.screen && menu_seen && now - menu_seen < 300 && ikb_foreground() && input_kbm_last();
+    // 仍有菜单按钮时不受短暂焦点切换和动画时长影响；所有菜单关闭后只保留原有的短过渡期。
+    int gap = !menu && mouse_active && ((keep_pointer && open_menu) ||
+              (!f.screen && menu_seen && now - menu_seen < 300));
     set_pointer(menu || gap);
     int l = ikb_down(KEY_MOUSE_L), r = ikb_down(KEY_MOUSE_R);
     int click_l = l && !held_l, click_r = r && !held_r;
