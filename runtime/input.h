@@ -37,9 +37,6 @@ int menu_cursor_pointer(void);
 int menu_cursor_map(void);   // the Purah Pad's map is open: the mouse's stick is the left one (its cursor)
 // a dialogue box is on screen and TOTK_DIALOGUE_CLICK is on: left click is B, right click A (input.c poll_merged)
 int menu_cursor_dialogue(void);
-// A menu screen (not the ability wheel, a D-pad strip or the map) has the game's focus box, whichever device was used
-// last: input.c turns the scroll wheel into steps of its focus. 0 with the menu cursor off.
-int menu_cursor_menu(void);
 // A D-pad strip's screen (ShortCut_00) is open; it has no focus box while held. 0 with the menu cursor off.
 int menu_cursor_strip(void);
 // The Purah Pad's camera is open: its frame and pointer without the map the Scope has. 0 with the menu cursor off.
