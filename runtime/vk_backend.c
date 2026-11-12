@@ -23,17 +23,25 @@
 
 #include "cfg.h"
 #include "flight.h"
+#include "framegen_pacing.h"
+#include "reflex_frame.h"
 #include "gfx.h"
 #include "host.h"
 #include "nvn_api.h"
 #include "vk.h"
 #include "vk_exec.h"
 #include "platform/platform.h"
+#include "ui/menu.h"
 #include "vk_dlaa.h"
 
 #define WEAK __attribute__((weak))
 
-typedef struct { VkImage image; VkFormat format; int w, h, has_crop, crop[4]; uint64_t frame, at, queued, value, pid; } PresentJob;   // pid: the frame's present ID (vk_reflex_frame)
+typedef struct {
+    VkImage image, interp[VK_DLSSG_MAX_GEN];
+    VkFormat format;
+    int w, h, has_crop, crop[4], interp_n;
+    uint64_t frame, at, queued, value, pid;
+} PresentJob;
 
 static PlatMutex pl = PLAT_MUTEX_INIT;
 static PlatCond pcv = PLAT_COND_INIT;   // job queued, job taken, job submitted
@@ -51,6 +59,7 @@ static void present_main(void *arg) {
     (void)arg;
     perf_core_thread(PCORE_PRESENT);
     uint64_t last = 0, last_queued = 0;
+    uint64_t fg_next = 0, last_output = 0;
     plat_mutex_lock(&pl);
     for (;;) {
         while (!pending) plat_cond_wait(&pcv, &pl);
@@ -59,8 +68,32 @@ static void present_main(void *arg) {
         busy = 1;
         plat_cond_broadcast(&pcv);
         plat_mutex_unlock(&pl);
+        vk_reflex_submit_frame(j.pid);
+        uint64_t real_at = j.at;
+        if (j.interp_n > 0) {
+            uint64_t period = frame_step_cap_ns();
+            FramegenPacing plan = framegen_pacing(kern_now_ns(), j.at, period, (unsigned)j.interp_n, fg_next);
+            fg_next = plan.next;
+            real_at = plan.real;
+            for (int i = 0; i < j.interp_n; i++) {
+                if (!j.interp[i]) rt_fatal("dlssg: generated image %d of %d is missing", i + 1, j.interp_n);
+                uint64_t at = plan.first + period * (uint64_t)i / (uint64_t)(j.interp_n + 1);
+                vk_reflex_present_frame(j.pid, REFLEX_PRESENT_GENERATED);
+                vk_present_blit(j.interp[i], VK_IMAGE_LAYOUT_GENERAL, j.format, j.w, j.h, j.has_crop ? j.crop : NULL);
+                wait_until(at);
+                uint64_t submitted = kern_now_ns();
+                vk_present_flip();
+                if (rt_trace & RT_TRACE_PRESENT)
+                    rt_log("present-fg: frame %llu generated %d/%d interval %.3f ms, %.3f ms past target",
+                           (unsigned long long)j.frame, i + 1, j.interp_n,
+                           last_output ? (submitted - last_output) / 1e6 : 0.0, submitted > at ? (submitted - at) / 1e6 : 0.0);
+                last_output = submitted;
+            }
+        } else {
+            fg_next = 0;
+        }
         if (flight_on) vk_thumbs_frame(j.frame);
-        vk_reflex_present_frame(j.pid);   // the present of this blit, and the submission after it, are the frame's
+        vk_reflex_present_frame(j.pid, j.interp_n ? REFLEX_PRESENT_REAL_WITH_GENERATED : REFLEX_PRESENT_REAL);
         vk_reflex_submit_frame(j.pid);
         vk_present_blit(j.image, VK_IMAGE_LAYOUT_GENERAL, j.format, j.w, j.h, j.has_crop ? j.crop : NULL);
         uint64_t f = vk_sync_submit(NULL, 0);   // a timeline value after the blit: deferred destruction waits for the blit too
@@ -72,16 +105,21 @@ static void present_main(void *arg) {
         plat_cond_broadcast(&pcv);
         plat_mutex_unlock(&pl);
         uint64_t t0 = kern_now_ns();
-        wait_until(j.at);
+        wait_until(real_at);
         uint64_t t1 = kern_now_ns();
         vk_present_flip();
+        if (j.interp_n > 0 && (rt_trace & RT_TRACE_PRESENT))
+            rt_log("present-fg: frame %llu real interval %.3f ms, %.3f ms past target",
+                   (unsigned long long)j.frame, last_output ? (t1 - last_output) / 1e6 : 0.0,
+                   t1 > real_at ? (t1 - real_at) / 1e6 : 0.0);
+        last_output = t1;
         // TOTK_TRACE=present: one line per present: the host present's interval, the interval of the game's present
         // calls (when the host present went out before back-edge pacing), the wait and how far past its target it went
         if (rt_trace & RT_TRACE_PRESENT)
             rt_log("present: frame %llu interval %.3f ms, game %.3f ms, waited %.3f ms, %.3f ms past target",
                    (unsigned long long)j.frame, last ? (t1 - last) / 1e6 : 0.0,
                    last_queued ? (j.queued - last_queued) / 1e6 : 0.0, (t1 - t0) / 1e6,
-                   j.at && t1 > j.at ? (t1 - j.at) / 1e6 : 0.0);
+                   real_at && t1 > real_at ? (t1 - real_at) / 1e6 : 0.0);
         last = t1;
         last_queued = j.queued;
         vk_pipeline_autosave();   // starts the autosave thread once
@@ -104,7 +142,6 @@ static void present_image(const tex_t *t, const int crop[4], uint64_t at_ns, uin
                           uint64_t value, uint64_t pid) {
     static volatile int32_t n_skipped;
     vk_exec_frame_log(t, frame);
-    vk_dlaa_frame();
     vk_mvsurvey_frame();
     vk_mvprev_frame();
     vk_mem_census(frame);
@@ -112,6 +149,7 @@ static void present_image(const tex_t *t, const int crop[4], uint64_t at_ns, uin
     __atomic_store_n(&gfx_counters.validation_errors, (uint64_t)vk_validation_errors_total(), __ATOMIC_RELAXED);
     const VkTexImage *img = vk_texture_get(t);
     if (!img || !(img->aspect & VK_IMAGE_ASPECT_COLOR_BIT)) {
+        vk_dlaa_frame();
         if (plat_inc32(&n_skipped) <= 8)
             rt_log("vk: present of texture %p (format %#x) skipped: no colour image", (const void *)t, t ? t->d.format : 0);
         if (value) {   // the queued value is still signalled, in order
@@ -128,7 +166,11 @@ static void present_image(const tex_t *t, const int crop[4], uint64_t at_ns, uin
         j.has_crop = 1;
         for (int i = 0; i < 4; i++) j.crop[i] = crop[i];
     }
+    vk_reflex_submit_frame(j.pid);
     vk_upload_flush(0);   // an upload vk_texture_get just recorded goes before the blit
+    if (!menu_is_open())
+        j.interp_n = vk_dlssg_evaluate(j.image, j.format, (uint32_t)j.w, (uint32_t)j.h, j.frame, j.interp, VK_DLSSG_MAX_GEN);
+    vk_dlaa_frame();
     plat_mutex_lock(&pl);
     if (!present_thread) {
         if (!plat_thread_spawn(present_main, NULL, "vk present", 0)) rt_fatal("vk: cannot start the present thread");
@@ -139,6 +181,7 @@ static void present_image(const tex_t *t, const int crop[4], uint64_t at_ns, uin
     pending = 1;
     plat_cond_broadcast(&pcv);
     plat_mutex_unlock(&pl);
+    vk_reflex_submit_frame(0);
     if (rdoc_active()) { vk_present_drain(); rdoc_after_present(frame); }
 }
 

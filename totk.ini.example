@@ -269,6 +269,21 @@
 # NVIDIA Reflex Low Latency (NVIDIA GPUs supporting VK_NV_low_latency2): off, on, or boost.
 # Reduces system input latency; boost keeps GPU clocks high in CPU-bound scenes. Read at start.
 # reflex = off
+# NVIDIA DLSS Frame Generation (DLSS-G) for RTX 40 series and newer GPUs: a generated image is shown between the frames
+# the game renders. Needs dlaa = 1 and nvngx_dlssg.dll from NVIDIA's DLSS SDK next to totk.exe; without them the
+# setting does nothing. Best tried with hdr = 0, a display without VRR (G-SYNC, FreeSync) and vsync on (vk_present = fifo):
+# with HDR on the generated images wash out over bright clouds, and with VRR on they leave in bursts (uneven motion).
+# 生成帧按基础帧率分配未来显示时间；fps_limit 仍指真实帧率，60 帧配合 2x 的目标输出为 120 帧。
+# Above 4x the generated images show artifacts. vk_present = mailbox becomes fifo while it is on.
+# Changes while the game runs take effect at once.
+# 目标输出帧率：0 使用手动模式；60～1000 自动选择 1～6 倍，自动调整真实帧率，覆盖 fps_limit。
+# 例如 240 表示尽量输出 240 FPS；倍率上限不足时会在日志中报告。默认关闭。
+# dlss_fg_target = 0
+# 帧生成总开关；关闭时目标帧率不会隐式开启插帧。
+# dlss_fg = 0
+# Images shown for each game frame with dlss_fg = 1: 2 to 6 (2 generates one image, 6 generates five). Beyond the
+# display's refresh rate the extra images cannot be shown.
+# dlss_fg_x = 2
 # The game's own FXAA after the post effects; with DLAA on it is not needed. Changes while the game runs take effect at
 # once.
 # fxaa = 1

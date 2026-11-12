@@ -187,12 +187,16 @@ enum { SM_COUNT = 0x8, SM_SCREENS = 0x10 };
 #define DIALOGUE_SCREEN "MessageDialog_00"   // the box a character's lines and the game's messages are shown in
 #define DIALOGUE_GAP_MS 500                  // how long after the box closed a click is still the dialogue's
 static uint64_t dialogue_scr;                // game thread only
-static int map_open(int *strip, int *camera) {
+static int gameplay_screen(const char *nm);
+static int screen_has_buttons(uint64_t scr);
+
+static int map_open(int *strip, int *camera, int *pointer_menu) {
+    *strip = *camera = 0;
+    if (pointer_menu) *pointer_menu = 0;
     uint64_t sm = screen_mgr();
     if (!sm) return 0;
     int32_t n = (int32_t)rd32(sm + SM_COUNT);
     uint64_t arr = rd64(sm + SM_SCREENS);
-    *strip = *camera = 0;
     if (n <= 0 || n > 1024 || !ok_at(arr, 8ull * (uint64_t)n)) return 0;
     const char *e = cfg_get("TOTK_MENU_CURSOR_LOG");
     int verbose = e && !strcmp(e, "1"), pad = 0, map = 0, bg = 0, pointer = 0;
@@ -210,6 +214,7 @@ static int map_open(int *strip, int *camera) {
         if (!strcmp(nm, DIALOGUE_SCREEN)) dialogue_scr = scr;
         pointer |= !strcmp(nm, "CameraPointer_00");
         *strip |= !strcmp(nm, "ShortCut_00");
+        if (pointer_menu && !*pointer_menu && !gameplay_screen(nm) && screen_has_buttons(scr)) *pointer_menu = 1;
         if (!verbose) continue;
         for (const char *c = nm; *c; c++) h = (h ^ (uint8_t)*c) * 1099511628211ull;
         if (len < sizeof list - 64) len += (size_t)snprintf(list + len, sizeof list - len, "%s%s", len ? " " : "", nm);
@@ -261,6 +266,15 @@ static uint64_t root_pane(uint64_t btn) {
     uint64_t blyt = rd64(btn + BTN_LAYOUT);
     return ok_at(blyt, LYT_ROOT + 8) ? rd64(blyt + LYT_ROOT) : 0;
 }
+// 焦点在标签或弹窗之间转移时，以仍打开的可操作菜单判断指针归属。
+static int screen_has_buttons(uint64_t scr) {
+    uint64_t nodes[MAX_NODES], buttons[MAX_NODES];
+    int count = nodes_of(scr, nodes, buttons);
+    for (int i = 0; i < count; i++)
+        if (usable(buttons[i]) && pane_shown(root_pane(buttons[i]))) return 1;
+    return 0;
+}
+
 // Every usable node's shown hit pane lies off the visible layout: the hit panes are stale (TotK never uses touch;
 // the dialogue choices' sit far from where the choices are drawn), so the buttons' own parts panes stand for them
 static int stale_hit_panes(int n, const uint64_t *btn, float lw, float lh, const Xf *t) {
@@ -344,7 +358,6 @@ static int dialogue_enabled(void) {
 static void set_pointer(int on) {
     if (plat_xchg32(&g_pointer, on) == on) return;
     ikb_cursor_update();
-    if (on) ikb_pointer_set(0.5f, 0.5f);   // the pointer appears in the middle, not where the capture left it
 }
 
 // The pointer on the game's picture, 0..1 from its top left (the present's fit, letterbox or pillarbox)
@@ -390,8 +403,22 @@ void menu_cursor_poll(uint64_t *buttons) {
     // The open screens are scanned every 100 ms, not at every pad read: each screen costs memory queries
     uint64_t now = plat_now_ms();
     static uint64_t map_at;
-    static int map, map_logged, dialogue_logged, strip, camera;
-    if (!map_at || now - map_at >= 100) map_at = now, map = map_open(&strip, &camera);
+    Focus f = focus_now();
+    char nm[48] = "";
+    if (f.screen) layout_name(f.screen, nm, sizeof nm);
+    int mouse_active = ikb_foreground() && input_kbm_last();
+    int menu = cursor && f.screen && !gameplay_screen(nm) && mouse_active;
+    if (menu) menu_seen = now;
+    static int map, map_logged, dialogue_logged, strip, camera, open_menu, scanning_menu;
+    int keep_pointer = cursor && mouse_active && !menu && menu_cursor_pointer();
+    if (!map_at || now - map_at >= 100 || (keep_pointer && !scanning_menu)) {
+        map_at = now;
+        open_menu = 0;
+        map = map_open(&strip, &camera, keep_pointer ? &open_menu : NULL);
+        scanning_menu = keep_pointer;
+    }
+    if (!keep_pointer) scanning_menu = 0;
+    if (keep_pointer && open_menu) menu_seen = now;
     // Between two lines of a conversation the game closes the box and opens it again, so a click made in that gap still
     // counts as dialogue for DIALOGUE_GAP_MS after the box was last open. The first clicks after a conversation fall
     // in it too and are B or A, as they are for a player who taps the button through the last line.
@@ -422,19 +449,14 @@ void menu_cursor_poll(uint64_t *buttons) {
     }
     __atomic_store_n(&g_strip, strip, __ATOMIC_RELAXED);
     __atomic_store_n(&g_camera, camera, __ATOMIC_RELAXED);
-    Focus f = focus_now();
-    char nm[48] = "";
-    if (f.screen) layout_name(f.screen, nm, sizeof nm);
     if (map && !map_logged) map_logged = 1, rt_log("menu_cursor: the map is open: the mouse moves its cursor");
     __atomic_store_n(&g_map, map, __ATOMIC_RELAXED);
     // With the gamepad as the last device the menus stay as they are on the console: no pointer, the capture kept.
     // Moving the mouse (or a key) makes keyboard and mouse the last device and the pointer comes.
     __atomic_store_n(&g_menu, f.screen && !gameplay_screen(nm) && !map, __ATOMIC_RELAXED);
-    int menu = f.screen && !gameplay_screen(nm) && ikb_foreground() && input_kbm_last();
-    if (menu) menu_seen = now;
-    // A menu's focus gap (a tab switch, a popup opening: no focus box for a frame or two) keeps the pointer where it
-    // is, for up to 300 ms: releasing it there captured it again and centred it when the next tab took the focus
-    int gap = !menu && !f.screen && menu_seen && now - menu_seen < 300 && ikb_foreground() && input_kbm_last();
+    // 菜单焦点过渡时保留指针；回到正常游戏后恢复原来的捕获规则。
+    int gap = !menu && mouse_active && ((keep_pointer && open_menu) ||
+              (!f.screen && menu_seen && now - menu_seen < 300));
     set_pointer(menu || gap);
     int l = ikb_down(KEY_MOUSE_L), r = ikb_down(KEY_MOUSE_R);
     int click_l = l && !held_l, click_r = r && !held_r;

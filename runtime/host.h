@@ -71,6 +71,7 @@ extern void (*perf_gpu_stats)(PerfGpu *out);
 void perf_set_overlay(int mode);
 int perf_gpu_timing(void);                      // GPU timestamps wanted: TOTK_TRACE=perf or the full overlay
 void perf_gpu_busy(uint64_t ns);                // GPU busy time of a timed submission part (vk_sync.c, any thread)
+int perf_frame_work(uint64_t *cpu_ns, uint64_t *gpu_ns);
 uint64_t perf_gpu_busy_total(void);             // its running total (the overlay's GPU time per frame)
 #define RT_RESULT(module, desc) ((uint32_t)(module) | ((uint32_t)(desc) << 9))
 void rt_sha256(const void *p, size_t n, uint8_t out[32]);   // BCrypt; fatal if the provider fails
@@ -319,6 +320,7 @@ void rt_patch_switch(int set, int on);                     // at run time (live 
 void *rt_patch_page(void);                                 // the page the patched code reads (NULL without the table)
 void frame_step_init(void);                                // after rt_patches_init: the real-time step's first value
 int frame_step_realtime(void);                             // the real-time step is on: presents ignore the interval
+uint64_t framegen_target_period_ns(void);
 uint64_t frame_step_cap_ns(void);                          // with the real-time step: the shortest frame in ns
 double frame_step_limit_hz(void);                         // the frame rate the limit gives (overlay); 0 unknown
 int64_t frame_step_world_us(void);                         // game time since the loaded save's first frame, -1 before

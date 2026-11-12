@@ -1173,7 +1173,7 @@ def bind_lines(dest):
     """The bind_ lines of the install's totk.ini (the Controls tab writes them), '' without the file."""
     try:
         text = (dest / 'totk.ini').read_text(encoding='utf-8', errors='replace')
-    except OSError:
+    except FileNotFoundError:
         return ''
     return '\n'.join(s for s in (line.split('#')[0].split(';')[0].strip() for line in text.splitlines())
                      if s.lower().startswith('bind_'))

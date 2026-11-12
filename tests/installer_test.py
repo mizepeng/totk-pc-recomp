@@ -21,6 +21,17 @@ from installer.events import Reporter  # noqa: E402
 from installer.layout import Layout  # noqa: E402
 
 
+class PromptBindingsTests(unittest.TestCase):
+    def test_missing_configuration_has_no_custom_bindings(self):
+        with mock.patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            self.assertEqual(steps.bind_lines(Path('unused')), '')
+
+    def test_unreadable_configuration_is_not_treated_as_defaults(self):
+        with mock.patch.object(Path, 'read_text', side_effect=PermissionError('denied')):
+            with self.assertRaises(PermissionError):
+                steps.bind_lines(Path('unused'))
+
+
 class Fake(runner.Step):
     """A step whose output is <dir>/<id>.out holding its key; dir is the temp folder for a transient step."""
 

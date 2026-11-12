@@ -128,7 +128,7 @@ static void mesa_cache_beside_exe(void) {
 
 static int create_instance(void) {
     mesa_cache_beside_exe();
-    const char *ext[12];
+    const char *ext[64];
     uint32_t n_ext = (uint32_t)gfx_window_vk_extensions(ext, 7);
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
     int validate = cfg_bool("TOTK_VK_VALIDATION");
@@ -142,7 +142,7 @@ static int create_instance(void) {
     if (validate || ab_want) ext[n_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     if (vk_hdr_wanted() && instance_ext_present(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME))   // HDR10 surface formats
         ext[n_ext++] = VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME;
-    vk_dlaa_instance_exts(ext, &n_ext, 12);
+    vk_dlaa_instance_exts(ext, &n_ext, 48);
     VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO, .pApplicationName = "TotK Recomp",
                              .pEngineName = "TotK Recomp", .apiVersion = VK_API_VERSION_1_3};
     VkInstanceCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, .pApplicationInfo = &app,
@@ -291,7 +291,7 @@ static int create_device(void) {
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, NULL);
     VkExtensionProperties *ep = calloc(ne ? ne : 1, sizeof *ep);
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, ep);
-    const char *ext[52];
+    const char *ext[96];
     uint32_t n_ext = 0;
     for (size_t i = 0; i < sizeof k_required_ext / sizeof *k_required_ext; i++) ext[n_ext++] = k_required_ext[i];
 
@@ -335,7 +335,7 @@ static int create_device(void) {
         CHAIN(fbl, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_FEATURES_EXT);
         CHAIN(lr, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR);
     }
-    vk_dlaa_device_exts(ep, ne, ext, &n_ext, 40);   // NGX's; the twelve slots after it stay for the nine below
+    vk_dlaa_device_exts(g_vk.instance, g_vk.phys, ep, ne, ext, &n_ext, 52);   // NGX's; the twelve slots after it stay for the optional extensions below
     if (has_ext(ep, ne, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) { g_vk.has_memory_budget = 1; ext[n_ext++] = VK_EXT_MEMORY_BUDGET_EXTENSION_NAME; }
     // GPU timestamps on the CPU clock (vk_sync.c): the perf line splits GPU idle time into waiting for a submission or not.
     if (has_ext(ep, ne, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)) { g_vk.has_calibrated = 2; ext[n_ext++] = VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME; }
@@ -353,15 +353,19 @@ static int create_device(void) {
         ext[n_ext++] = VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME;
     }
     // NVIDIA Reflex Low Latency (VK_NV_low_latency2 requires VK_KHR_present_id)
+    unsigned reflex_revision = 0;
+    for (uint32_t i = 0; i < ne; i++)
+        if (!strcmp(ep[i].extensionName, "VK_NV_low_latency2")) reflex_revision = ep[i].specVersion;
     const char *rv = cfg_value("TOTK_REFLEX");
     if (rv && strcmp(rv, "off") != 0 && strcmp(rv, "0") != 0) {
-        if (has_ext(ep, ne, VK_KHR_PRESENT_ID_EXTENSION_NAME) && has_ext(ep, ne, "VK_NV_low_latency2")) {
+        if (has_ext(ep, ne, VK_KHR_PRESENT_ID_EXTENSION_NAME) && reflex_revision >= 3) {
             g_vk.has_nv_reflex = 1;
             ext[n_ext++] = VK_KHR_PRESENT_ID_EXTENSION_NAME;
             ext[n_ext++] = "VK_NV_low_latency2";
             CHAIN(pid, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR);
         } else {
-            rt_log("Reflex: VK_NV_low_latency2 not available");
+            rt_log("Reflex: explicit submission attribution requires VK_NV_low_latency2 revision 3 and VK_KHR_present_id (driver revision %u)",
+                   reflex_revision);
         }
     }
     // Graphics pipeline library: chained last so it can be dropped again when vk_caps_gpl declines it.

@@ -150,7 +150,8 @@ int vk_fsr_record(VkCommandBuffer cb, unsigned slot, VkImage src, VkFormat fmt, 
 void vk_fsr_release(void);   // before the device goes away
 void vk_reflex_submit_frame(uint64_t id);   // this thread's submissions belong to frame id (0: the game's current one)
 uint64_t vk_reflex_submit_id(void);
-void vk_reflex_present_frame(uint64_t id);  // the present thread, before the blit of frame id
+// kind 使用 reflex_frame.h 中的真实帧、生成帧或同组真实帧标记。
+void vk_reflex_present_frame(uint64_t id, int kind);
 int vk_has_reflex(void);
 // Colour adjustment on the present (vk_color.c): with TOTK_COLOR_* away from their defaults, records a pass that writes
 // src's crop rectangle {x, y, w, h}, adjusted, into an RGBA16F image of that size in GENERAL and returns it (the caller
