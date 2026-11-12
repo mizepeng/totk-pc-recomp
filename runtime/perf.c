@@ -32,7 +32,10 @@ void perf_set_overlay(int mode) {
     __atomic_store_n(&perf_on, perf_base || mode == 2, __ATOMIC_RELAXED);
 }
 
-int perf_gpu_timing(void) { return (rt_trace & RT_TRACE_PERF) || __atomic_load_n(&overlay, __ATOMIC_RELAXED) == 2 || cfg_int("TOTK_DLSS_FG_TARGET") > 0; }
+int perf_gpu_timing(void) {
+    return (rt_trace & RT_TRACE_PERF) || __atomic_load_n(&overlay, __ATOMIC_RELAXED) == 2 ||
+           (cfg_bool("TOTK_DLSS_FG") && cfg_int("TOTK_DLSS_FG_TARGET") > 0);
+}
 
 static volatile int64_t gpu_busy_total;
 
@@ -276,7 +279,7 @@ int perf_frame_work(uint64_t *cpu_ns, uint64_t *gpu_ns) {
 
 static void auto_work_sample(uint64_t now, uint64_t interval, uint64_t replay) {
     static uint64_t start, frames, previous_gpu;
-    if (cfg_int("TOTK_DLSS_FG_TARGET") <= 0 || !interval || interval > 100000000) return;
+    if (!cfg_bool("TOTK_DLSS_FG") || cfg_int("TOTK_DLSS_FG_TARGET") <= 0 || !interval || interval > 100000000) return;
     uint64_t waits = frame_ns[PERF_PACE] + frame_ns[PERF_DRAIN];
     uint64_t work = interval > waits ? interval - waits : 0;
     if (replay > work) work = replay;

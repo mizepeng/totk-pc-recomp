@@ -269,6 +269,7 @@
 # 目标输出帧率：0 使用手动模式；60～1000 自动选择 1～6 倍，自动调整真实帧率，覆盖 fps_limit。
 # 例如 240 表示尽量输出 240 FPS；倍率上限不足时会在日志中报告。默认关闭。
 # dlss_fg_target = 0
+# 帧生成总开关；关闭时目标帧率不会隐式开启插帧。
 # dlss_fg = 0
 # Images shown for each game frame with dlss_fg = 1: 2 to 6 (2 generates one image, 6 generates five). Beyond the
 # display's refresh rate the extra images cannot be shown.

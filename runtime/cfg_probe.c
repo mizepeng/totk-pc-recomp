@@ -9,6 +9,7 @@
 #include "host.h"
 #include "input.h"
 #include "input_map.h"
+#include "vk_dlaa.h"
 #include "platform/platform.h"
 
 static int fails;
@@ -447,6 +448,18 @@ int probe_cfg(void) {
               EQ(cfg_get("TOTK_PAD_LAYOUT"), "nintendo") && EQ(cfg_get("TOTK_PROMPTS"), "nintendo"),
           "a prompts line of the file's own wins over 0.1.9's pad_layout = xbox_prompts");
     plat_file_delete(path);
+    cfg_load("cfg-probe-missing.ini");
+    plat_setenv("TOTK_DLSS_FG", NULL);
+    plat_setenv("TOTK_DLSS_FG_TARGET", NULL);
+    cfg_set("TOTK_DLSS_FG_TARGET", "224");
+    cfg_set("TOTK_DLSS_FG", "0");
+    CHECK(!vk_dlssg_wanted() && framegen_target_period_ns() == 0, "master off overrides a saved target");
+    cfg_set("TOTK_DLSS_FG", "1");
+    CHECK(vk_dlssg_wanted() && framegen_target_period_ns() > 0, "master on enables the saved target");
+    cfg_set("TOTK_DLSS_FG_TARGET", "0");
+    CHECK(vk_dlssg_wanted() && framegen_target_period_ns() == 0, "manual mode keeps frame generation enabled");
+    cfg_set("TOTK_DLSS_FG", "0");
+    CHECK(!vk_dlssg_wanted(), "master off also disables manual frame generation");
     cfg_load("cfg-probe-missing.ini");
     int listed = 0;
     for (int i = 0; cfg_meta_at(i); i++) {

@@ -101,7 +101,7 @@ void frame_step_init(void) {
         step_interval = (_Atomic uint32_t *)((uint8_t *)rt_patch_page() + 8);
         step_store((float)STEP_FIRST_S);
     }
-    if (cfg_int("TOTK_DLSS_FG_TARGET") > 0 && !step_word)
+    if (cfg_bool("TOTK_DLSS_FG") && cfg_int("TOTK_DLSS_FG_TARGET") > 0 && !step_word)
         rt_fatal("frame rate: automatic frame generation requires realtime = 1");
     frame_limit_live();
     rt_log("frame rate: present interval %s, %s", rt_patch_enabled(fps60) ? "1..3 (above 30 fps)" : "2..3 (shipping 30 fps)",
@@ -145,7 +145,7 @@ static void frame_limit_live(void) {
     if (limit_read && v == limit_seen) return;
     limit_read = 1;
     limit_seen = v;
-    int automatic = cfg_int("TOTK_DLSS_FG_TARGET") > 0;
+    int automatic = cfg_bool("TOTK_DLSS_FG") && cfg_int("TOTK_DLSS_FG_TARGET") > 0;
     int hz = automatic ? LIMIT_MAX_HZ : limit_parse();
     if (hz == limit_hz) return;
     limit_hz = hz;

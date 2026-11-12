@@ -604,7 +604,7 @@ static void row_fps_limit() {
     }
     const char *set = cfg_get("TOTK_FPS_LIMIT"), *old = cfg_get("TOTK_FPS60");
     int cur = (!set || !*set) && old && !strcmp(old, "0") ? 0 : -1;
-    if (cfg_int("TOTK_DLSS_FG_TARGET") > 0) opt_disable_next(UI_MENU_DLSS_FG_TARGET_DESC);
+    if (cfg_bool("TOTK_DLSS_FG") && cfg_int("TOTK_DLSS_FG_TARGET") > 0) opt_disable_next(UI_MENU_DLSS_FG_AUTO_NOTE);
     opt_choice_list("TOTK_FPS_LIMIT", UI_MENU_FPS_LIMIT, vals, names, N, UI_MENU_FPS_LIMIT_DESC, cur);
 }
 
@@ -668,18 +668,20 @@ static void tab_screen(float scale) {
     static const UiTextId perf[] = {UI_MENU_PERF_OFF, UI_MENU_PERF_FPS, UI_MENU_PERF_FULL};
     opt_choice("TOTK_PERF_OVERLAY", UI_MENU_PERF_OVERLAY, perf, 3, UI_MENU_PERF_OVERLAY_DESC);
     opt_group(UI_MENU_DLSS_FG);
+    opt_toggle("TOTK_DLSS_FG", UI_MENU_DLSS_FG, UI_MENU_DLSS_FG_DESC);
+    bool fg_enabled = cfg_bool("TOTK_DLSS_FG");
     static const char *const fg_targets[] = {"0", "60", "90", "120", "144", "165", "180", "200", "224", "240", "360", "480", "720"};
     const char *const fg_target_names[] = {menu_text(UI_MENU_DLSS_FG_FIXED), "60 FPS", "90 FPS", "120 FPS", "144 FPS", "165 FPS",
                                           "180 FPS", "200 FPS", "224 FPS", "240 FPS", "360 FPS", "480 FPS", "720 FPS"};
     char fg_status[96];
     snprintf(fg_status, sizeof fg_status, menu_text(UI_MENU_DLSS_FG_ACTIVE_MULTIPLIER), vk_dlssg_multiplier());
+    if (!fg_enabled) opt_disable_next(UI_MENU_DLSS_FG_OFF_NOTE);
     opt_choice_list("TOTK_DLSS_FG_TARGET", UI_MENU_DLSS_FG_TARGET, fg_targets, fg_target_names, 13,
-                    UI_MENU_DLSS_FG_TARGET_DESC, -1, cfg_int("TOTK_DLSS_FG_TARGET") > 0 ? fg_status : nullptr);
-    if (cfg_int("TOTK_DLSS_FG_TARGET") > 0) opt_disable_next(UI_MENU_DLSS_FG_TARGET_DESC);
-    opt_toggle("TOTK_DLSS_FG", UI_MENU_DLSS_FG, UI_MENU_DLSS_FG_DESC);
+                    UI_MENU_DLSS_FG_TARGET_DESC, -1, fg_enabled && cfg_int("TOTK_DLSS_FG_TARGET") > 0 ? fg_status : nullptr);
     static const char *const fgx[] = {"2", "3", "4", "5", "6"};
     static const char *const fgx_names[] = {"2x", "3x", "4x", "5x", "6x"};
-    if (cfg_int("TOTK_DLSS_FG_TARGET") > 0) opt_disable_next(UI_MENU_DLSS_FG_TARGET_DESC);
+    if (!fg_enabled) opt_disable_next(UI_MENU_DLSS_FG_OFF_NOTE);
+    else if (cfg_int("TOTK_DLSS_FG_TARGET") > 0) opt_disable_next(UI_MENU_DLSS_FG_AUTO_NOTE);
     opt_choice_list("TOTK_DLSS_FG_X", UI_MENU_DLSS_FG_X, fgx, fgx_names, 5, UI_MENU_DLSS_FG_X_DESC);
     opt_group(UI_MENU_GRAPHICS);
     row_output_res();

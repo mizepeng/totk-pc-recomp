@@ -113,11 +113,12 @@ static unsigned fg_target(void) {
     return (unsigned)target;
 }
 
-int vk_dlssg_wanted(void) { return cfg_bool("TOTK_DLSS_FG") || fg_target() > 0; }
+int vk_dlssg_wanted(void) { return cfg_bool("TOTK_DLSS_FG"); }
 
 unsigned vk_dlssg_multiplier(void) { return __atomic_load_n(&auto_multiplier, __ATOMIC_ACQUIRE); }
 
 uint64_t framegen_target_period_ns(void) {
+    if (!vk_dlssg_wanted()) return 0;
     unsigned target = fg_target();
     if (!target) return 0;
     unsigned multiplier = __atomic_load_n(&auto_multiplier, __ATOMIC_ACQUIRE);
@@ -322,7 +323,7 @@ void vk_dlaa_init(void) {
            ss_avail, ss_driver, (unsigned)ss_init_res, ss_maj, ss_min, ss_bld, ss_sub, fg_avail, fg_driver, (unsigned)fg_init_res);
     N.available = ss_avail == 1;
     N.fg_available = fg_avail == 1;
-    if (fg_target() && !N.fg_available) rt_fatal("dlssg: target mode requested but NVIDIA frame generation is unavailable");
+    if (vk_dlssg_wanted() && fg_target() && !N.fg_available) rt_fatal("dlssg: target mode requested but NVIDIA frame generation is unavailable");
     rt_log("dlaa: NGX up; DLSS %s%s; DLSS-G %s", N.available ? "available" : "NOT available (is " DLSS_MODEL " next to the executable?)",
            ss_driver == 1 ? "; the driver needs an update" : "", N.fg_available ? "available" : "NOT available");
 }
@@ -1846,7 +1847,9 @@ static void fg_sky_stamp(VkCommandBuffer cb, uint32_t slot, int g, uint32_t ow, 
          .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &color},
         {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 2, .descriptorCount = 1,
          .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .pImageInfo = &out}};
-    struct { uint32_t w, h; float cut; } pc = {ow, oh, 0.02f};
+    // 反向 Z 的天空清除值为 0；0.02 会把有实体深度的人物和场景也覆盖成当前真实帧。
+    // 只修正清除深度，保留生成帧中实体像素的时间位置。
+    struct { uint32_t w, h; float cut; } pc = {ow, oh, 0.0f};
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, FG.sky_pipe);
     vk_pipeline_push_fn()(cb, VK_PIPELINE_BIND_POINT_COMPUTE, FG.sky_layout, 0, 3, wr);
     vkCmdPushConstants(cb, FG.sky_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
@@ -1874,7 +1877,7 @@ static float fg_camera_far(const float *cr) {
 int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh, VkImage *out_interps, int out_cap) {
     if (out_cap > 0 && out_interps) out_interps[0] = VK_NULL_HANDLE;
     if (!out_interps || out_cap < 1) return 0;
-    if (fg_target() && (!N.fg_available || FG.failed))
+    if (vk_dlssg_wanted() && fg_target() && (!N.fg_available || FG.failed))
         rt_fatal("dlssg: requested target mode cannot generate frames; check the preceding NVIDIA error");
     int want = N.fg_available && !FG.failed && vk_dlssg_wanted();
     if (want != FG.on) {
