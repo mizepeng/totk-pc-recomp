@@ -36,8 +36,17 @@ This repository is public. Game data lives outside it and every derived file sta
 
 ## Pull requests
 
-Preparing a pull request: target `dev`; the checks by changed area, the proof and the performance runs it carries are in [CONTRIBUTING.md](CONTRIBUTING.md), "Pull requests". Reviewing one: [docs/pr-review-kit/](docs/pr-review-kit/).
+向原作者的 upstream 仓库贡献 PR 时，以其 `dev` 为目标，并遵循 [CONTRIBUTING.md](CONTRIBUTING.md) 的检查要求。本 fork 的分支维护遵循下方约定。代码审查参考 [docs/pr-review-kit/](docs/pr-review-kit/)。
 
 ## Writing
 
 Code, comments, docs and commit messages are in English. Commit messages are plain sentences without type prefixes.
+
+## 本 fork 的分支维护
+
+- `main` 是唯一长期维护的集成分支，不再维护本地或 `origin` 上的 `dev`。
+- 新需求使用 `feature/<简短英文名称>`，独立 bug 修复使用 `fix/<简短英文名称>`；由代理按任务自行命名。
+- 修改代码前确认目标分支和工作区状态；不要把未提交改动带入其他分支。
+- 分支合入 `main`，并确认本地和远程分支的提交都已包含在 `main` 后，删除对应的本地与 `origin` 分支。
+- 未合并的分支保留；不要为清理分支而擅自合并尚待验证的工作。
+- `upstream` 是原作者仓库的参考来源，本约定不要求修改或删除其分支。
