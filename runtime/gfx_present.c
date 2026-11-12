@@ -430,6 +430,8 @@ void vk_reflex_marker(int marker, uint64_t pid) {
 void vk_reflex_sleep(void) {
     VkCtx *c = vk_ctx();
     if (!c || !c->has_nv_reflex || !g_reflex_sleep || !g_reflex_sem || g_reflex_mode <= 0 || !g_sc) return;
+    // 驱动主动限帧等待不属于 CPU 工作量，不能据此让自动插帧持续升高倍率。
+    uint64_t pace_started = perf_begin();
     uint64_t val = __atomic_add_fetch(&g_reflex_val, 1, __ATOMIC_RELAXED);
     VkLatencySleepInfoNV si = {
         .sType = VK_STRUCTURE_TYPE_LATENCY_SLEEP_INFO_NV,
@@ -458,6 +460,7 @@ void vk_reflex_sleep(void) {
     } else if (r != VK_ERROR_INITIALIZATION_FAILED) {
         rt_fatal("Reflex: latency sleep failed (%d)", (int)r);
     }
+    perf_end(PERF_PACE, pace_started);
 }
 
 // ---- swapchain

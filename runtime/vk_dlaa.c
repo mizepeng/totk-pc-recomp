@@ -2034,7 +2034,10 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
         rt_log("dlssg: fixed multiplier %dx", gens + 1);
     }
 
-    if (FG.feat && (FG.ow != ow || FG.oh != oh || FG.fmt != fmt || FG.created_max < capacity)) {
+    // 此上下文禁用了动态分辨率；场景深度和矢量尺寸变化时，也必须按新输入尺寸重建。
+    if (FG.feat && (FG.ow != ow || FG.oh != oh || FG.sw != sw || FG.sh != sh || FG.fmt != fmt || FG.created_max < capacity)) {
+        rt_log("dlssg: rebuilding feature: scene %ux%u -> %ux%u, output %ux%u -> %ux%u",
+               FG.sw, FG.sh, sw, sh, FG.ow, FG.oh, ow, oh);
         vk_queue_lock();
         vkDeviceWaitIdle(c->device);
         vk_queue_unlock();
