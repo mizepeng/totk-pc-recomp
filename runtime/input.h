@@ -28,6 +28,20 @@ uint64_t input_buttons_last(void);
 // mouse_direct.c: the right stick's side a mouse shake gives while Ultrahand holds an object (-1 / +1), 0 while the
 // mouse does not shake; input.c puts it on the stick
 int input_direct_mouse_shake(void);
+enum {
+    INPUT_CAM_UNCLASSIFIED = 0,
+    INPUT_CAM_FREE_ROAM,
+    INPUT_CAM_AIM,
+    INPUT_CAM_SCOPE,
+    INPUT_CAM_LOCK_ON,
+    INPUT_CAM_MENU_WHEEL,
+    INPUT_CAM_ABILITY,
+    INPUT_CAM_ULTRAHAND_OBJECT,
+    INPUT_CAM_VEHICLE,
+    INPUT_CAM_DISABLED,
+};
+int input_camera_context(void);
+int input_gameplay_active(void);
 // menu_cursor.c: the L ability wheel or a D-pad strip has the focus: 1 / 0, -1 with the menu cursor off (not read)
 int menu_cursor_shortcut(void);
 // menu_cursor.c: the pointer in the game's menus (1.4.3). poll: once per pad read, adds a click's A or B; pointer: a
@@ -37,6 +51,8 @@ int menu_cursor_pointer(void);
 int menu_cursor_map(void);   // the Purah Pad's map is open: the mouse's stick is the left one (its cursor)
 // a dialogue box is on screen and TOTK_DIALOGUE_CLICK is on: left click is B, right click A (input.c poll_merged)
 int menu_cursor_dialogue(void);
+// 游戏菜单有焦点框（任一设备）时为 1，菜单光标关闭时为 0；仅用于判断菜单是否打开，普通菜单不接收滚轮。
+int menu_cursor_menu(void);
 // A D-pad strip's screen (ShortCut_00) is open; it has no focus box while held. 0 with the menu cursor off.
 int menu_cursor_strip(void);
 // The Purah Pad's camera is open: its frame and pointer without the map the Scope has. 0 with the menu cursor off.

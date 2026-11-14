@@ -31,7 +31,7 @@
 
 [performance]
 # The keys of this section and of [diagnostics] are for testing and troubleshooting, and take effect at the next start.
-# The Advanced tab of the settings menu (F1) shows all of them except zstd_native and zstd_check.
+# The Advanced tab of the settings menu (F1) shows all of them except zstd_native, zstd_check and the crash guards.
 
 # Scheduling.
 # A thread waiting for a virtual core interrupts the owner when it runs game code: 1 = on, 2 = priority inheritance
@@ -57,9 +57,13 @@
 # game waits once for the GPU to finish the frame it presented last; with 1 that wait covers the frame before it
 # instead. On Great Sky Island (Linux, RX 9070 XT) with shadow_defer = 1 this took about 73 to 100 fps. Costs one more
 # frame of input delay, and frame times vary more from frame to frame than with 0. GPU results the game reads back after that wait, for example occlusion queries, can be a frame old.
-# Works on 1.2.1 and 1.4.3; 1.1.0 ignores it. Needs shadow storage, which is on by default on Linux and Wine and needs
-# the environment variable TOTK_SHADOW=1 on native Windows; without it the setting is ignored and the log says so.
+# Works on 1.2.1 and 1.4.3; 1.1.0 ignores it. Needs shadow storage (shadow below), which is on by default on Linux and
+# Wine and needs shadow = 1 on native Windows; without it the setting is ignored and the log says so.
 # sync_ahead = 0
+# Shadow storage, 0 or 1: each CPU-visible memory pool of the game gets a host-visible copy that the GPU reads, in
+# place of importing the game's memory. Default: on under Linux and Wine, off on native Windows. sync_ahead needs it.
+# Costs about 0.2 ms a frame and doubles the memory of those pools (about 1.1 GB; docs/building.md). Read at start.
+# shadow = 0
 # With sync_ahead = 1: when the game changes memory the GPU still reads, queue the copy into the GPU's shadow of that
 # memory for the GPU to run in order, 0 or 1. Default: on. With 0 the replay thread waits for the GPU to finish
 # reading instead, which costs part of the gain.
@@ -102,6 +106,14 @@
 # the differences (1 = on; slow).
 # zstd_native = 1
 # zstd_check = 0
+
+# Crash guards: game code that crashes on stale data skips it instead (0 = the game's own code).
+# An optional reference holding an invalid value is treated as absent.
+# optref_guard = 1
+# A Recall or Ultrahand target the game would crash on is skipped for that frame.
+# ability_guard = 1
+# A model scene report row with an out-of-range index is skipped for that frame (1.4.3 only).
+# report_guard = 1
 
 # Render fixes.
 # Wait for the game to finish rewriting level-of-detail data before the GPU reads it: stops objects flashing in the
@@ -200,7 +212,7 @@
 # does. Read when a movie starts, so a change takes effect at the next movie.
 # movie_aspect = keep
 # Field of view, in percent of the game's own: 70 to 140, 100 (the default) leaves the camera as it is. Higher shows
-# more of the world around Link. Game version 1.4.3 only. Changes while the game runs take effect at once.
+# more of the world around Link. Game versions 1.1.0 and 1.4.3. Changes while the game runs take effect at once.
 # fov = 100
 # Anisotropic filtering of surface textures: game (the level the game asks for, as on the Switch) or 2, 4, 8, 16. Keeps
 # ground, roads and walls seen at a shallow angle sharp into the distance. Only filtered, mipmapped textures that tile
@@ -298,7 +310,7 @@
 # hdr_ui_nits = 203
 # Highlight hue correction in percent (0 to 100): bright colours such as fire turn towards white as in the game's SDR
 # picture, matching the light they cast; 0 keeps them fully saturated. Changes take effect at once.
-# hdr_hue = 80
+# hdr_hue = 70
 
 [language]
 # Language: a Windows locale such as de-DE, or a Switch code (en-US, ja, zh-Hant, ...). Default: the Windows locale.
@@ -329,6 +341,12 @@
 # audio_prefill_ms = 20
 # Volume in percent (0 to 100), on top of the game's own. Changes while the game runs take effect at once.
 # volume = 100
+# Music, sound effects and voices (characters, creatures, Link) in percent, on top of volume. Live like volume. Below
+# 100 the port tells the three apart by the sound files the game loads; a value moved during play reaches sounds
+# loaded after the change at once and earlier ones by their next stream read, the rest count as effects.
+# volume_music = 100
+# volume_sfx = 100
+# volume_voice = 100
 # Speakers: stereo, 5.1 or auto (5.1 when the Windows speaker setup has six or more channels, stereo otherwise). The
 # game is told the same channel count and mixes for it. Takes effect at the next start.
 # audio_channels = stereo
@@ -384,6 +402,10 @@
 # conversation. 0 (the default) leaves both buttons on their bindings there, one key per controller button. Changes
 # while the game runs.
 # dialogue_click = 0
+# The mouse pointer over the game window while the cursor is not captured (the game's menus, the settings menu, after
+# Esc). 1: a gold arrowhead with a dark edge and a turquoise gem, drawn by the port at the window's DPI, instead of
+# the system arrow. 0 (the default) keeps the system arrow. Changes while the game runs.
+# pointer_image = 0
 # Mouse camera sensitivity (0 to 10; 0 = no mouse camera and no cursor capture). With mouse_mode = direct, 1 turns the
 # camera 0.08 degrees per count, the same in every camera mode (about 14.3 cm a turn at 800 DPI).
 # mouse_sens = 1
@@ -447,6 +469,22 @@
 # Folder with the Switch shared fonts (BFTTF files, tools/extract_fonts.py output), for Chinese and Korean text.
 # Default: shared-fonts next to totk.exe. TOTK_SHARED_FONTS overrides it.
 # shared_fonts =
+
+# Gameplay Tweaks: independent live switches.
+[gameplay tweaks]
+# gameplay_tweaks_enabled = 0
+# gameplay_ultrahand_rotate = 1
+# gameplay_ultrahand_c_axis = 1
+# gameplay_ultrahand_distance = 1
+# gameplay_weapon_wheel = 1
+# gameplay_weapon_sensitivity = 1
+# gameplay_item_wheel = 1
+# gameplay_item_ad = 1
+# gameplay_map_zoom = 1
+# gameplay_map_zoom_sensitivity = 1
+# gameplay_rotation_sensitivity = 1
+# gameplay_distance_sensitivity = 1
+# gameplay_item_sensitivity = 1
 
 [cheats]
 # One line per cheat of the mods' cheat files, mods\<mod>\cheats\<build id>.txt (docs/cheats.md); the Cheats tab of

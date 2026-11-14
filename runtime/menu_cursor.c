@@ -336,6 +336,8 @@ static int gameplay_screen(const char *nm) {
 static volatile int32_t g_pointer;   // a menu has the pointer: input_cursor_allowed releases the capture
 static volatile int32_t g_map;       // the Purah Pad's map is open (not the Scope): the mouse moves its cursor
 static volatile int32_t g_dialogue;  // a dialogue box is on screen and TOTK_DIALOGUE_CLICK is on: left B, right A
+// 菜单焦点框存在（任一设备）；gameplay_tweaks 的武器滚轮用它避开菜单，普通菜单本身不接收滚轮。
+static volatile int32_t g_menu;
 static volatile int32_t g_strip;     // a D-pad strip's screen is open (the scroll wheel's steps along it)
 static volatile int32_t g_scope;
 static volatile int32_t g_camera;    // the Purah Pad's camera is open (the scroll wheel zooms it)
@@ -343,6 +345,7 @@ static volatile int32_t g_camera;    // the Purah Pad's camera is open (the scro
 int menu_cursor_pointer(void) { return __atomic_load_n(&g_pointer, __ATOMIC_RELAXED); }
 int menu_cursor_map(void) { return __atomic_load_n(&g_map, __ATOMIC_RELAXED); }
 int menu_cursor_dialogue(void) { return __atomic_load_n(&g_dialogue, __ATOMIC_RELAXED); }
+int menu_cursor_menu(void) { return __atomic_load_n(&g_menu, __ATOMIC_RELAXED); }
 int menu_cursor_strip(void) { return __atomic_load_n(&g_strip, __ATOMIC_RELAXED); }
 int menu_cursor_camera(void) { return __atomic_load_n(&g_camera, __ATOMIC_RELAXED); }
 
@@ -405,6 +408,7 @@ void menu_cursor_poll(uint64_t *buttons) {
         set_pointer(0);
         __atomic_store_n(&g_map, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&g_dialogue, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_menu, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&g_strip, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&g_camera, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&g_scope, 0, __ATOMIC_RELAXED);
@@ -452,6 +456,7 @@ void menu_cursor_poll(uint64_t *buttons) {
     if (!cursor) {
         set_pointer(0);
         __atomic_store_n(&g_map, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_menu, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&g_strip, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&g_camera, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&g_scope, 0, __ATOMIC_RELAXED);
@@ -464,6 +469,7 @@ void menu_cursor_poll(uint64_t *buttons) {
     __atomic_store_n(&g_map, map, __ATOMIC_RELAXED);
     // With the gamepad as the last device the menus stay as they are on the console: no pointer, the capture kept.
     // Moving the mouse (or a key) makes keyboard and mouse the last device and the pointer comes.
+    __atomic_store_n(&g_menu, f.screen && !gameplay_screen(nm) && !map, __ATOMIC_RELAXED);
     // 菜单焦点过渡时保留指针；回到正常游戏后恢复原来的捕获规则。
     int gap = !menu && mouse_active && ((keep_pointer && open_menu) ||
               (!f.screen && menu_seen && now - menu_seen < 300));

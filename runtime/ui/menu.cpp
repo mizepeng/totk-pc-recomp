@@ -516,7 +516,35 @@ static void row_output_res(void) {
         snprintf(shown[i], sizeof shown[i], "%d × %d", w, h);   // U+00D7, the multiplication sign
         names[i] = shown[i];
     }
-    opt_choice_list("TOTK_OUTPUT_RES", UI_MENU_OUTPUT_RES, vals, names, N, UI_MENU_OUTPUT_RES_DESC);
+    // A size of another shape needs that shape's folders (romfs.c overlay_init): the layout, and with Xbox or PC
+    // prompts the prompts' one too. The setup writes them for the displays it saw (installer/steps.py Shapes); at a
+    // shape without them the game draws 16:9 with bars or keeps the Switch prompts, so the row says so and offers to
+    // start the generator for the next start (romfs_shape_prepare; a child process, the menu does not wait). The file
+    // checks run again only when a setting or the started generation changes.
+    static unsigned seen = ~0u;
+    static int missing, started;   // started: 0 not asked, 1 running, -1 failed to start
+    static char asked[16];
+    const char *now = cfg_value("TOTK_OUTPUT_RES");
+    if (seen != cfg_version()) {
+        seen = cfg_version();
+        unsigned w = 0, h = 0;
+        const char *layout = cfg_value("TOTK_PAD_LAYOUT");
+        const char *want = input_prompts_folder(input_prompts_pick(cfg_get("TOTK_PROMPTS"), layout), layout);
+        missing = sscanf(now, "%ux%u", &w, &h) == 2 && romfs_shape_missing(w, h, want);
+    }
+    int here = started && !strcmp(asked, now);   // the generation started for the value shown
+    const char *note = !missing ? nullptr
+                       : here   ? menu_text(started > 0 ? UI_MENU_OUTPUT_RES_PREPARING : UI_MENU_SHAPE_PREPARE_FAILED)
+                                : menu_text(UI_MENU_OUTPUT_RES_NO_LAYOUT);
+    opt_choice_list("TOTK_OUTPUT_RES", UI_MENU_OUTPUT_RES, vals, names, N, UI_MENU_OUTPUT_RES_DESC, -1, note);
+    if (!missing || here || !romfs_shape_can_prepare()) return;
+    if (!opt_button("##shape_prepare", UI_MENU_SHAPE_PREPARE, UI_MENU_SHAPE_PREPARE_DESC)) return;
+    unsigned w = 0, h = 0;
+    const char *layout = cfg_value("TOTK_PAD_LAYOUT");
+    sscanf(now, "%ux%u", &w, &h);
+    snprintf(asked, sizeof asked, "%s", now);
+    started = romfs_shape_prepare(w, h, input_prompts_folder(input_prompts_pick(cfg_get("TOTK_PROMPTS"), layout), layout))
+                  ? 1 : -1;
 }
 
 static void row_render_scale(void) {
@@ -761,6 +789,9 @@ static void tab_game(float scale) {
 static void tab_sound(float scale) {
     opt_begin("##sound", scale);
     opt_slider("TOTK_VOLUME", UI_MENU_VOLUME, 0, 100, UI_MENU_VOLUME_DESC, 5, "%.0f %%");
+    opt_slider("TOTK_VOLUME_MUSIC", UI_MENU_VOLUME_MUSIC, 0, 100, UI_MENU_VOLUME_MUSIC_DESC, 5, "%.0f %%");
+    opt_slider("TOTK_VOLUME_SFX", UI_MENU_VOLUME_SFX, 0, 100, UI_MENU_VOLUME_SFX_DESC, 5, "%.0f %%");
+    opt_slider("TOTK_VOLUME_VOICE", UI_MENU_VOLUME_VOICE, 0, 100, UI_MENU_VOLUME_VOICE_DESC, 5, "%.0f %%");
     static const UiTextId channels[] = {UI_MENU_CHANNELS_AUTO, UI_MENU_CHANNELS_STEREO, UI_MENU_CHANNELS_51};
     opt_choice("TOTK_AUDIO_CHANNELS", UI_MENU_AUDIO_CHANNELS, channels, 3, UI_MENU_AUDIO_CHANNELS_DESC);
     opt_end();
@@ -825,8 +856,9 @@ static const char *prompts_note(bool *restart) {
     const char *layout = cfg_value("TOTK_PAD_LAYOUT"), *used = romfs_prompts();
     const char *want = input_prompts_folder(input_prompts_pick(cfg_get("TOTK_PROMPTS"), layout), layout);
     if (want == used || (want && used && !strcmp(want, used))) return nullptr;
-    // A game resolution of another shape needs a folder of its own for the prompts (<folder>-<w>x<h>). The setup writes
-    // one for each size the Screen tab offers; at any other size the shape is the reason, not the setup.
+    // A game resolution of another shape needs a folder of its own for the prompts (<folder>-<w>x<h>, one per shape).
+    // The setup writes it for the shapes of the displays it saw and the prompts totk.ini had then; at another shape
+    // the shape is the reason (row_output_res offers to make it), not a damaged install.
     int off = romfs_prompts_off(want);
     if (want && !romfs_prompts_ready(want) && off != ROMFS_PROMPTS_SHAPE) return menu_text(UI_MENU_PROMPTS_MISSING);
     switch (off) {
@@ -878,6 +910,32 @@ static void restart_confirm(void) {
     ImGui::EndPopup();
 }
 
+static void rows_gameplay_tweaks(void) {
+    opt_group(UI_MENU_GROUP_GAMEPLAY_TWEAKS);
+    opt_toggle("TOTK_GAMEPLAY_TWEAKS_ENABLED", UI_MENU_GAMEPLAY_TWEAKS_ENABLED, UI_MENU_GAMEPLAY_TWEAKS_ENABLED_DESC);
+    if (!cfg_bool("TOTK_GAMEPLAY_TWEAKS_ENABLED")) return;
+
+    opt_toggle("TOTK_GAMEPLAY_ULTRAHAND_ROTATE", UI_MENU_GAMEPLAY_ULTRAHAND_ROTATE, UI_MENU_GAMEPLAY_ULTRAHAND_ROTATE_DESC);
+    opt_toggle("TOTK_GAMEPLAY_ULTRAHAND_C_AXIS", UI_MENU_GAMEPLAY_ULTRAHAND_C_AXIS, UI_MENU_GAMEPLAY_ULTRAHAND_C_AXIS_DESC);
+    opt_slider("TOTK_GAMEPLAY_ROTATION_SENSITIVITY", UI_MENU_GAMEPLAY_ROTATION_SENSITIVITY, 0.25f, 4.0f,
+               UI_MENU_GAMEPLAY_ROTATION_SENSITIVITY_DESC, 0.05f, "%.2fx");
+    opt_toggle("TOTK_GAMEPLAY_ULTRAHAND_DISTANCE", UI_MENU_GAMEPLAY_ULTRAHAND_DISTANCE, UI_MENU_GAMEPLAY_ULTRAHAND_DISTANCE_DESC);
+    opt_slider("TOTK_GAMEPLAY_DISTANCE_SENSITIVITY", UI_MENU_GAMEPLAY_DISTANCE_SENSITIVITY, 0.25f, 4.0f,
+               UI_MENU_GAMEPLAY_DISTANCE_SENSITIVITY_DESC, 0.05f, "%.2fx");
+
+    opt_toggle("TOTK_GAMEPLAY_WEAPON_WHEEL", UI_MENU_GAMEPLAY_WEAPON_WHEEL, UI_MENU_GAMEPLAY_WEAPON_WHEEL_DESC);
+    opt_slider("TOTK_GAMEPLAY_WEAPON_SENSITIVITY", UI_MENU_GAMEPLAY_WEAPON_SENSITIVITY, 0.25f, 4.0f,
+               UI_MENU_GAMEPLAY_WEAPON_SENSITIVITY_DESC, 0.05f, "%.2fx");
+    opt_toggle("TOTK_GAMEPLAY_ITEM_WHEEL", UI_MENU_GAMEPLAY_ITEM_WHEEL, UI_MENU_GAMEPLAY_ITEM_WHEEL_DESC);
+    opt_slider("TOTK_GAMEPLAY_ITEM_SENSITIVITY", UI_MENU_GAMEPLAY_ITEM_SENSITIVITY, 0.25f, 4.0f,
+               UI_MENU_GAMEPLAY_ITEM_SENSITIVITY_DESC, 0.05f, "%.2fx");
+    opt_toggle("TOTK_GAMEPLAY_ITEM_AD", UI_MENU_GAMEPLAY_ITEM_AD, UI_MENU_GAMEPLAY_ITEM_AD_DESC);
+
+    opt_toggle("TOTK_GAMEPLAY_MAP_ZOOM", UI_MENU_GAMEPLAY_MAP_ZOOM, UI_MENU_GAMEPLAY_MAP_ZOOM_DESC);
+    opt_slider("TOTK_GAMEPLAY_MAP_ZOOM_SENSITIVITY", UI_MENU_GAMEPLAY_MAP_ZOOM_SENSITIVITY, 0.25f, 4.0f,
+               UI_MENU_GAMEPLAY_MAP_ZOOM_SENSITIVITY_DESC, 0.05f, "%.2fx");
+}
+
 static void tab_controls(float scale) {
     opt_begin("##controls", scale);
     static const UiTextId layout[] = {UI_MENU_PAD_LAYOUT_AUTO, UI_MENU_PAD_LAYOUT_NINTENDO, UI_MENU_PAD_LAYOUT_XBOX};
@@ -897,8 +955,10 @@ static void tab_controls(float scale) {
     opt_toggle("TOTK_MENU_CURSOR", UI_MENU_MENU_CURSOR, UI_MENU_MENU_CURSOR_DESC);
     opt_toggle("TOTK_MAP_CLICK", UI_MENU_MAP_CLICK, UI_MENU_MAP_CLICK_DESC);
     opt_toggle("TOTK_DIALOGUE_CLICK", UI_MENU_DIALOGUE_CLICK, UI_MENU_DIALOGUE_CLICK_DESC);
+    opt_toggle("TOTK_POINTER_IMAGE", UI_MENU_POINTER_IMAGE, UI_MENU_POINTER_IMAGE_DESC);
     row_walk_key();
     opt_slider("TOTK_WALK_SCALE", UI_MENU_WALK_SCALE, 0.2f, 0.9f, UI_MENU_WALK_SCALE_DESC, 0.01f, "%.2f");
+    rows_gameplay_tweaks();
     // Analog sticks: one dead zone row per stick, falling back to TOTK_STICK_DEADZONE (both sticks) while unset. With
     // a gamepad connected each row shows its stick's deflection now, before the dead zone: a drifting stick's resting
     // value, to set it above.
@@ -980,9 +1040,10 @@ static bool validation_layer_present(void) {
 
 // Every setting the menu shows back to its default (the environment's keys stay), written to totk.ini.
 static void reset_all(void) {
-    const char *keys[128];
+    const char *keys[256];   // above the number of rows in cfg.c metas (128 on 2026-11-11)
     int n = 0;
-    for (const CfgMeta *m; n < 128 && (m = cfg_meta_at(n)); n++) keys[n] = m->key;
+    for (const CfgMeta *m; n < 256 && (m = cfg_meta_at(n)); n++) keys[n] = m->key;
+    if (cfg_meta_at(n)) rt_log("menu: reset covers the first %d settings only; raise keys[] in reset_all", n);
     int done = cfg_reset(keys, n);
     opt_save_soon();
     rt_log("menu: reset %d settings to their defaults", done);
