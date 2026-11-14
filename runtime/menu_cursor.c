@@ -186,12 +186,13 @@ static void layout_name(uint64_t scr, char *out, size_t n) {
 enum { SM_COUNT = 0x8, SM_SCREENS = 0x10 };
 #define DIALOGUE_SCREEN "MessageDialog_00"   // the box a character's lines and the game's messages are shown in
 #define DIALOGUE_GAP_MS 500                  // how long after the box closed a click is still the dialogue's
+static uint64_t scope_map_scr, scope_pointer_scr;
 static uint64_t dialogue_scr;                // game thread only
 static int gameplay_screen(const char *nm);
 static int screen_has_buttons(uint64_t scr);
 
-static int map_open(int *strip, int *camera, int *pointer_menu) {
-    *strip = *camera = 0;
+static int map_open(int *strip, int *camera, int *scope, int *pointer_menu) {
+    *strip = *camera = *scope = 0;
     if (pointer_menu) *pointer_menu = 0;
     uint64_t sm = screen_mgr();
     if (!sm) return 0;
@@ -210,9 +211,11 @@ static int map_open(int *strip, int *camera, int *pointer_menu) {
         layout_name(scr, nm, sizeof nm);
         pad |= !strcmp(nm, "AppMenuOverlay_00");
         map |= !strcmp(nm, "AppMap_00");
+        if (!strcmp(nm, "AppMap_00")) scope_map_scr = scr;
         bg |= !strcmp(nm, "AppMenuBG_00");
         if (!strcmp(nm, DIALOGUE_SCREEN)) dialogue_scr = scr;
         pointer |= !strcmp(nm, "CameraPointer_00");
+        if (!strcmp(nm, "CameraPointer_00")) scope_pointer_scr = scr;
         *strip |= !strcmp(nm, "ShortCut_00");
         if (pointer_menu && !*pointer_menu && !gameplay_screen(nm) && screen_has_buttons(scr)) *pointer_menu = 1;
         if (!verbose) continue;
@@ -223,6 +226,7 @@ static int map_open(int *strip, int *camera, int *pointer_menu) {
     static int lines;
     if (verbose && h != last && lines < 200) last = h, lines++, rt_log("menu_cursor: open screens: %s", list);
     *camera = pad && pointer && !map && !bg;
+    *scope = pad && pointer && map && !bg;
     return pad && map && bg;
 }
 // The dialogue window is open. Read at every pad read from the screen the last scan found open, so a click follows the
@@ -333,6 +337,7 @@ static volatile int32_t g_pointer;   // a menu has the pointer: input_cursor_all
 static volatile int32_t g_map;       // the Purah Pad's map is open (not the Scope): the mouse moves its cursor
 static volatile int32_t g_dialogue;  // a dialogue box is on screen and TOTK_DIALOGUE_CLICK is on: left B, right A
 static volatile int32_t g_strip;     // a D-pad strip's screen is open (the scroll wheel's steps along it)
+static volatile int32_t g_scope;
 static volatile int32_t g_camera;    // the Purah Pad's camera is open (the scroll wheel zooms it)
 
 int menu_cursor_pointer(void) { return __atomic_load_n(&g_pointer, __ATOMIC_RELAXED); }
@@ -340,6 +345,13 @@ int menu_cursor_map(void) { return __atomic_load_n(&g_map, __ATOMIC_RELAXED); }
 int menu_cursor_dialogue(void) { return __atomic_load_n(&g_dialogue, __ATOMIC_RELAXED); }
 int menu_cursor_strip(void) { return __atomic_load_n(&g_strip, __ATOMIC_RELAXED); }
 int menu_cursor_camera(void) { return __atomic_load_n(&g_camera, __ATOMIC_RELAXED); }
+
+int menu_cursor_scope(void) {
+    if (!__atomic_load_n(&g_scope, __ATOMIC_RELAXED)) return 0;
+    // 退出望远镜后立即恢复视角，不等待下一次完整界面扫描。
+    return game_object(scope_map_scr, SCR_REQUEST + 1) && game_object(scope_pointer_scr, SCR_REQUEST + 1) &&
+           rd8(scope_map_scr + SCR_STATE) == SCR_OPENED && rd8(scope_pointer_scr + SCR_STATE) == SCR_OPENED;
+}
 
 static int enabled(void) {
     if (!RT_V143) return 0;
@@ -395,6 +407,7 @@ void menu_cursor_poll(uint64_t *buttons) {
         __atomic_store_n(&g_dialogue, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&g_strip, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&g_camera, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_scope, 0, __ATOMIC_RELAXED);
         return;
     }
     // The open screens are scanned every 100 ms, not at every pad read: each screen costs memory queries
@@ -406,12 +419,12 @@ void menu_cursor_poll(uint64_t *buttons) {
     int mouse_active = ikb_foreground() && input_kbm_last();
     int menu = cursor && f.screen && !gameplay_screen(nm) && mouse_active;
     if (menu) menu_seen = now;
-    static int map, map_logged, dialogue_logged, strip, camera, open_menu, scanning_menu;
+    static int map, map_logged, dialogue_logged, strip, camera, scope, open_menu, scanning_menu;
     int keep_pointer = cursor && mouse_active && !menu && menu_cursor_pointer();
     if (!map_at || now - map_at >= 100 || (keep_pointer && !scanning_menu)) {
         map_at = now;
         open_menu = 0;
-        map = map_open(&strip, &camera, keep_pointer ? &open_menu : NULL);
+        map = map_open(&strip, &camera, &scope, keep_pointer ? &open_menu : NULL);
         scanning_menu = keep_pointer;
     }
     if (!keep_pointer) scanning_menu = 0;
@@ -441,10 +454,12 @@ void menu_cursor_poll(uint64_t *buttons) {
         __atomic_store_n(&g_map, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&g_strip, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&g_camera, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_scope, 0, __ATOMIC_RELAXED);
         return;
     }
     __atomic_store_n(&g_strip, strip, __ATOMIC_RELAXED);
     __atomic_store_n(&g_camera, camera, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_scope, scope, __ATOMIC_RELAXED);
     if (map && !map_logged) map_logged = 1, rt_log("menu_cursor: the map is open: the mouse moves its cursor");
     __atomic_store_n(&g_map, map, __ATOMIC_RELAXED);
     // With the gamepad as the last device the menus stay as they are on the console: no pointer, the capture kept.

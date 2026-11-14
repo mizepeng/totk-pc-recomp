@@ -41,6 +41,7 @@
 #include "cfg.h"
 #include "host.h"
 #include "mods.h"
+#include "scope_zoom.h"
 #include "ov.h"
 #include "platform/platform.h"
 
@@ -631,21 +632,38 @@ int res_wants_wide_overlay(const unsigned out[2]) {
 // window_settings_live), the first time at the first present.
 #define FOV_MIN 70
 #define FOV_MAX 140
+static int scope_steps;
+static PlatMutex fov_lock = PLAT_MUTEX_INIT;
+
 void res_fov_live(void) {
-    static int set = -2, shown = 100;
+    static int set = -2, shown = 100, shown_steps;
+    plat_mutex_lock(&fov_lock);
     if (set == -2) set = rt_patch_set("fov");
     int pct = cfg_int("TOTK_FOV");
     pct = pct < FOV_MIN ? FOV_MIN : pct > FOV_MAX ? FOV_MAX : pct;
-    if (pct == shown) return;
-    shown = pct;
+    int steps = __atomic_load_n(&scope_steps, __ATOMIC_ACQUIRE);
+    if (pct == shown && steps == shown_steps) { plat_mutex_unlock(&fov_lock); return; }
     if (set < 0) {
+        plat_mutex_unlock(&fov_lock);
+        if (steps) rt_fatal("scope: this build has no field-of-view patch for telescope zoom");
         rt_log("resolution: this game version has no field-of-view patch; TOTK_FOV=%d does nothing", pct);
         return;
     }
-    float k = pct / 100.0f;
-    memcpy((uint8_t *)rt_patch_page() + 60, &k, sizeof k);   // before the switch: a site that sees it on reads k
-    rt_patch_switch(set, pct != 100);
-    rt_log("resolution: field of view %d%% of the game's", pct);
+    float k = pct / 100.0f * scope_zoom_fov(steps);
+    memcpy((uint8_t *)rt_patch_page() + 60, &k, sizeof k);
+    rt_patch_switch(set, pct != 100 || steps != 0);
+    shown = pct;
+    shown_steps = steps;
+    plat_mutex_unlock(&fov_lock);
+    rt_log("resolution: field of view %d%%, telescope zoom step %d/8", pct, steps);
+}
+
+void res_scope_zoom(int active, int notches) {
+    int old = __atomic_load_n(&scope_steps, __ATOMIC_RELAXED);
+    int next = scope_zoom_steps(old, active, notches);
+    if (next == old) return;
+    __atomic_store_n(&scope_steps, next, __ATOMIC_RELEASE);
+    res_fov_live();
 }
 
 // TOTK_DYNAMIC_RES = 0 holds the game's dynamic resolution at 100 % (recomp/patches-v121.txt and patches-v143.txt,

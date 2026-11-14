@@ -618,6 +618,12 @@ static void wheel_route(uint64_t *bp, int32_t sr[2]) {
         __atomic_store_n(&g_kbm_last, 1, __ATOMIC_RELAXED);   // the pointer comes to a menu the wheel turns in
         rec_wheel(real);
     }
+    int scope = menu_cursor_scope();
+    res_scope_zoom(scope, scope ? notches : 0);
+    if (scope) {
+        wheel_stick(0, WHEEL_NONE);
+        return;
+    }
     // A strip is its D-pad direction held with its screen open; with the menu cursor off (the screens not read,
     // menu_cursor_shortcut -1) the buttons alone decide, as for the mouse's selectors
     int sc = b & (1ull << B_UP | 1ull << B_LEFT | 1ull << B_RIGHT) && !(b & 1ull << B_L) ? menu_cursor_shortcut() : 0;
