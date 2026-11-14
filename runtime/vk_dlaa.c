@@ -1105,6 +1105,8 @@ static int perf_quality(uint32_t w, uint32_t ow) {
 static struct {
     int on, failed, reset;
     uint32_t ow, oh, sw, sh, internal_w, internal_h;
+    // 特性创建时声明的动态分辨率上限；场景尺寸在此范围内变化时只更新每帧的子矩形，不重建特性。
+    uint32_t max_w, max_h;
     VkFormat fmt;
     NgxHandle *feat;
     NgxParam *params;
@@ -1966,15 +1968,11 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
         D.fg_scene_ok = 0;
         return 0;
     }
-    // Only a present that has a scene captured since the last evaluation is interpolated. A present without one (the
-    // game drew no scene for it) would be warped with the depth and vectors of an earlier frame, and the generated
-    // images would shift by the motion of that frame.
-    if (FG.snap_seen == FG.snap_n) {
-        FG.reset = 1;
-        FG.cam_prev_ok = 0;
-        FG.stale++;
-        return 0;
-    }
+    // 上次评估之后没有新的场景采集：游戏这一帧没有重画 3D 场景（武器等快捷菜单打开时世界暂停，只画界面）。
+    // 这种帧不能再用上一帧的运动矢量（画面会按那一帧的运动偏移），但也不必停掉插帧：场景是静止的，
+    // 于是按零位移、相机不动来评估，界面的变化交给 DLSS-G 自己的光流。历史保持连续，开关菜单时不重置。
+    int frozen = FG.snap_seen == FG.snap_n;
+    if (frozen) FG.stale++;
     FG.snap_seen = FG.snap_n;
     const VkCtx *c = vk_ctx();
     if (!FG.pool) {
@@ -2076,8 +2074,10 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
         rt_log("dlssg: fixed multiplier %dx", gens + 1);
     }
 
-    // 此上下文禁用了动态分辨率；场景深度和矢量尺寸变化时，也必须按新输入尺寸重建。
-    if (FG.feat && (FG.ow != ow || FG.oh != oh || FG.sw != sw || FG.sh != sh || FG.fmt != fmt || FG.created_max < capacity)) {
+    // 特性以动态分辨率创建，上限为输出尺寸：游戏的动态分辨率档位变化只改每帧的输入尺寸和子矩形，
+    // 不再重建特性（重建要等 GPU 空闲并清空历史，转动视角时表现为卡顿）。只有输出、格式、倍率容量变化，
+    // 或场景超出创建时的上限，才重建。
+    if (FG.feat && (FG.ow != ow || FG.oh != oh || sw > FG.max_w || sh > FG.max_h || FG.fmt != fmt || FG.created_max < capacity)) {
         rt_log("dlssg: rebuilding feature: scene %ux%u -> %ux%u, output %ux%u -> %ux%u",
                FG.sw, FG.sh, sw, sh, FG.ow, FG.oh, ow, oh);
         vk_queue_lock();
@@ -2146,11 +2146,12 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
         p_seti(p, "DLSSG.SynchronousInit", 0);
         p_setu(p, "DLSSG.InternalWidth", sw);
         p_setu(p, "DLSSG.InternalHeight", sh);
-        p_setu(p, "DLSSG.MaxDynamicWidth", ow > sw ? ow : sw);
-        p_setu(p, "DLSSG.MaxDynamicHeight", oh > sh ? oh : sh);
+        uint32_t max_w = ow > sw ? ow : sw, max_h = oh > sh ? oh : sh;
+        p_setu(p, "DLSSG.MaxDynamicWidth", max_w);
+        p_setu(p, "DLSSG.MaxDynamicHeight", max_h);
         p_setu(p, "DLSSG.BackbufferFormat", (unsigned)fmt);
         p_setu(p, "DLSSG.MultiFrameCountMax", capacity);
-        p_seti(p, "DLSSG.DynamicResolution", 0);
+        p_seti(p, "DLSSG.DynamicResolution", 1);
         p_setu(p, "DLSSG.BackbufferSubrectWidth", ow);
         p_setu(p, "DLSSG.BackbufferSubrectHeight", oh);
         p_setu(p, "DLSSG.DepthSubrectWidth", sw);
@@ -2184,6 +2185,7 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
         FG.reset = 1;
         FG.created_max = capacity;
         FG.sw = sw, FG.sh = sh;
+        FG.max_w = max_w, FG.max_h = max_h;
         FG.internal_w = sw, FG.internal_h = sh;
         rt_log("dlssg: DLSS-G feature created at %ux%u (format %d, scene %ux%u, max generated %u)",
                ow, oh, (int)fmt, sw, sh, capacity);
@@ -2249,7 +2251,7 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
     p_setp(p, "DLSSG.SyncSignalOnlyCallbackData", (void *)&FG);
     p_setp(p, "DLSSG.SyncWaitOnlyCallback", (void *)fg_cb_sync_wait_only);
     p_setp(p, "DLSSG.SyncWaitOnlyCallbackData", (void *)&FG);
-    p_seti(p, "DLSSG.DynamicResolution", 0);
+    p_seti(p, "DLSSG.DynamicResolution", 1);
     p_seti(p, "DLSSG.IsRecording", 1);
     p_seti(p, "DLSSG.EnableInterp", 1);
     p_setu(p, "DLSSG.MultiFrameCount", (unsigned)gens);
@@ -2263,10 +2265,11 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
     p_seti(p, "DLSSG.MenuDetectionEnabled", 1);
     p_seti(p, "DLSSG.InvertXAxis", 0);
     p_seti(p, "DLSSG.InvertYAxis", 0);
-    p_setf(p, "DLSSG.JitterOffsetX", D.fg_jx);
-    p_setf(p, "DLSSG.JitterOffsetY", D.fg_jy);
-    p_setf(p, "DLSSG.MvecScaleX", input.scale_x);
-    p_setf(p, "DLSSG.MvecScaleY", input.scale_y);
+    // 冻结帧：矢量缩放为 0 即全屏零位移，抖动也归零（上一次采集的抖动不属于这一帧）。
+    p_setf(p, "DLSSG.JitterOffsetX", frozen ? 0.0f : D.fg_jx);
+    p_setf(p, "DLSSG.JitterOffsetY", frozen ? 0.0f : D.fg_jy);
+    p_setf(p, "DLSSG.MvecScaleX", frozen ? 0.0f : input.scale_x);
+    p_setf(p, "DLSSG.MvecScaleY", frozen ? 0.0f : input.scale_y);
     // 零位移是合法静止像素；FLT_MAX 不可能出现在 RG16F 图中，用作明确的无效值哨兵。
     p_setf(p, "DLSSG.MvecInvalidValue", input.invalid_motion);
     p_seti(p, "DLSSG.MvecDilated", 0);
@@ -2305,7 +2308,7 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
             fg_mat4_to_float(proj, FG.cam_view_to_clip);
             fg_mat4_to_float(proj_inv, FG.cam_clip_to_view);
             double prev_vp[16];
-            if (FG.cam_prev_ok) {
+            if (FG.cam_prev_ok && !frozen) {
                 for (int i = 0; i < 16; i++) prev_vp[i] = FG.cam_prev_vp[i];
             } else {
                 memcpy(prev_vp, vp, sizeof vp);
@@ -2396,7 +2399,8 @@ int vk_dlssg_evaluate(VkImage backbuffer, VkFormat fmt, uint32_t ow, uint32_t oh
             ready = got_disable ? disable == 0 : 1;
         if (!NGX_OK(r) || !ready) break;
         full_barrier(cb);
-        fg_sky_stamp(cb, slot, g, ow, oh);
+        // 冻结帧的深度来自更早的场景，可能与当前画面（地图等整屏界面）无关，不据此把真实帧盖回生成帧。
+        if (!frozen) fg_sky_stamp(cb, slot, g, ow, oh);
         out_interps[produced++] = FG.out[slot][g];
         FG.ready_count++;
         if (g + 1 < gens) full_barrier(cb);

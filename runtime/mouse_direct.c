@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "cfg.h"
+#include "gameplay_tweaks.h"
 #include "host.h"
 #include "input.h"
 #include "input_map.h"
@@ -376,6 +377,8 @@ static void camera_input(Cpu *c) {
     if (direct_mode()) {
         int32_t dx, dy;
         input_direct_mouse_sample(!input_direct_mouse_selector_active() && (accept || hand_active(plat_now_ns())), &dx, &dy);
+        // 究极手抓着物体并按住右键：纵向位移用于推远/拉近（gameplay_tweaks.c），不再上下移动物体
+        if (hand_active(plat_now_ns()) && gameplay_tweaks_hand_drag(dy)) dy = 0;
         float sensitivity = (float)cfg_double("TOTK_MOUSE_SENS");
         sensitivity = fminf(10, fmaxf(0, sensitivity));
         uint32_t player = (dx || dy) ? player_state_logged() : 0;

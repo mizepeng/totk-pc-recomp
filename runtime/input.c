@@ -635,7 +635,6 @@ static void wheel_route(uint64_t *bp, int32_t sr[2]) {
                 : menu_cursor_camera() ? WHEEL_CAMERA
                                        : WHEEL_NONE;
     if (menu_is_open()) where = WHEEL_NONE;
-    else if (where == WHEEL_MAP && gameplay_tweaks_map_zoom()) where = WHEEL_NONE;
     else if (where == WHEEL_STRIP && gameplay_tweaks_strip_wheel(b)) where = WHEEL_NONE;
     int32_t v = wheel_stick(notches, where);
     if (!v) return;
@@ -755,6 +754,8 @@ static void poll_merged(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx
             // horse and turns menu tabs, the D-pad does other things too, and then the mouse stays on the camera.
             // Before the screens were read (the menu cursor off) the buttons alone decide, as before.
             if (selector && menu_cursor_shortcut() == 0) selector = 0;
+            // 滚轮打开的武器栏由 gameplay_tweaks 按住十字键右，键盘状态里没有：同样让左右移动鼠标选择
+            if (!selector && gameplay_tweaks_weapon_open()) selector = 4;
             mouse_camera(k, selector);
             // On the map the left stick moves the cursor and the right one zooms: the mouse moves the cursor there
             // (the scroll wheel zooms, wheel_route)

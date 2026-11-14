@@ -37,6 +37,7 @@ static int g_font_bad;
 extern "C" {
 #include "amiibo.h"
 #include "cheats.h"
+#include "gameplay_tweaks.h"
 #include "cfg.h"
 #include "fs.h"
 #include "input.h"
@@ -929,11 +930,6 @@ static void rows_gameplay_tweaks(void) {
     opt_toggle("TOTK_GAMEPLAY_ITEM_WHEEL", UI_MENU_GAMEPLAY_ITEM_WHEEL, UI_MENU_GAMEPLAY_ITEM_WHEEL_DESC);
     opt_slider("TOTK_GAMEPLAY_ITEM_SENSITIVITY", UI_MENU_GAMEPLAY_ITEM_SENSITIVITY, 0.25f, 4.0f,
                UI_MENU_GAMEPLAY_ITEM_SENSITIVITY_DESC, 0.05f, "%.2fx");
-    opt_toggle("TOTK_GAMEPLAY_ITEM_AD", UI_MENU_GAMEPLAY_ITEM_AD, UI_MENU_GAMEPLAY_ITEM_AD_DESC);
-
-    opt_toggle("TOTK_GAMEPLAY_MAP_ZOOM", UI_MENU_GAMEPLAY_MAP_ZOOM, UI_MENU_GAMEPLAY_MAP_ZOOM_DESC);
-    opt_slider("TOTK_GAMEPLAY_MAP_ZOOM_SENSITIVITY", UI_MENU_GAMEPLAY_MAP_ZOOM_SENSITIVITY, 0.25f, 4.0f,
-               UI_MENU_GAMEPLAY_MAP_ZOOM_SENSITIVITY_DESC, 0.05f, "%.2fx");
 }
 
 static void tab_controls(float scale) {
@@ -1624,6 +1620,18 @@ static void perf_draw(const MenuTarget *t, float scale) {
     dl->AddText(ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 255, 255, 235), g_perf_text);
 }
 
+// 滚轮打开的武器快捷栏开着时，在屏幕下方居中提示确认键（gameplay_tweaks.c：只有 E 确认）
+static void weapon_hint_draw(const MenuTarget *t, float scale) {
+    if (g_open.load(std::memory_order_relaxed) || !gameplay_tweaks_weapon_open()) return;
+    const char *text = ui_text(UI_MENU_GAMEPLAY_WEAPON_HINT);
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    ImVec2 sz = ImGui::CalcTextSize(text);
+    float pad = 8 * scale;
+    ImVec2 p(((float)t->width - sz.x) / 2 - pad, (float)t->height * 0.80f);
+    dl->AddRectFilled(p, ImVec2(p.x + sz.x + pad * 2, p.y + sz.y + pad * 2), IM_COL32(0, 0, 0, 170), 4 * scale);
+    dl->AddText(ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 255, 255, 240), text);
+}
+
 extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const char **shot) {
     *shot = NULL;
     cheats_frame(frame);   // the data cheats and the buttons of the cheats that need them held
@@ -1641,7 +1649,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
             g_tab_request = 0;
             set_open(1);
             open = true;
-        } else if (!g_perf_mode) {
+        } else if (!g_perf_mode && !gameplay_tweaks_weapon_open()) {
             return 0;
         }
     }
@@ -1693,6 +1701,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     ImGui::NewFrame();
     if (open) layout_menu(t->width, t->height, scale);
     perf_draw(t, scale);
+    weapon_hint_draw(t, scale);
     ImGui::Render();
     if (open) g_save_pending = opt_save_tick(0);
     g_cost_ns += plat_now_ns() - t0;

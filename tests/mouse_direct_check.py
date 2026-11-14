@@ -29,6 +29,7 @@ int ikb_foreground(void) { return foreground; }
 int input_cursor_allowed(void) { return allowed; }
 int input_direct_mouse_selector_active(void) { return selecting; }
 void ikb_mouse_take(int32_t *x, int32_t *y) { ++takes; *x=raw_x; *y=raw_y; raw_x=raw_y=0; }
+int gameplay_tweaks_hand_drag(int32_t dy) { (void)dy; return 0; }
 void input_direct_mouse_sample(int enabled, int32_t *x, int32_t *y) {
     *x=*y=0;
     if(enabled && captured && foreground && allowed) ikb_mouse_take(x,y);
@@ -592,8 +593,8 @@ InputMap input_map;
 void ikb_cursor_update(void) { abort(); }
 void ikb_menu_closed(void) { abort(); }
 int gameplay_tweaks_capture_needed(void) { return 0; }
-int gameplay_tweaks_map_zoom(void) { return 0; }
 int gameplay_tweaks_strip_wheel(uint64_t b) { (void)b; return 0; }
+int gameplay_tweaks_weapon_open(void) { return 0; }
 void gameplay_tweaks_reset(void) {}
 void gameplay_tweaks_prepare_keys(uint8_t *d, uint64_t b) { (void)d; (void)b; }
 void gameplay_tweaks_apply(uint64_t f, int a, uint64_t *b, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
@@ -677,7 +678,7 @@ def bl_target(address, word):
 def check_tables():
     """Each version's load-site table (runtime/mouse_direct.c) against its patch file: one bl to page +0xf80 a site, the
     same original word (a pre-indexed ldr s<t>, [x<n>, #imm]! is the plain ldr s<t>, [x<n>] after its patched mov)."""
-    source = (ROOT / 'runtime' / 'mouse_direct.c').read_text()
+    source = (ROOT / 'runtime' / 'mouse_direct.c').read_text(encoding='utf-8')
     for version, page in (('143', 0x3adf000), ('121', 0x472b000)):
         block = re.search(r'load_sites_%s\[\] = \{(.*?)\n\};' % version, source, re.S)[1]
         table = {int(a, 16): int(w, 16) for a, w in re.findall(r'\{0x([0-9a-f]+), 0x([0-9a-f]+),', block)}
