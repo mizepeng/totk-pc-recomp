@@ -233,6 +233,14 @@ int probe_cfg(void) {
     memset(dn, 0, sizeof dn);
     dn[KEY_T] = 1;
     CHECK(input_map_buttons(dn) == 1ull << B_Y, "keys: T is Y too (the left button is A in the menus)");
+    // 后退侧键和左 Shift 同为 B；前进侧键、中键默认不按任何键
+    memset(dn, 0, sizeof dn);
+    dn[KEY_MOUSE_X1] = 1;
+    CHECK(input_map_buttons(dn) == 1ull << B_B, "keys: the back side button (mouse_x1) is B, like Left Shift");
+    dn[KEY_MOUSE_X1] = 0, dn[KEY_MOUSE_X2] = dn[KEY_MOUSE_M] = 1;
+    CHECK(input_map_buttons(dn) == 0, "keys: the forward side button and the middle button are unbound");
+    memset(dn, 0, sizeof dn);
+    dn[KEY_T] = 1;
     plat_setenv("TOTK_BIND_X", "key:t");
     input_map_configure();
     CHECK(input_map_buttons(dn) == 1ull << B_X, "bind: bind_X = key:t takes T from Y's defaults");
@@ -417,6 +425,9 @@ int probe_cfg(void) {
     char line[256];
     input_map_line(&mp, B_ZR, line, sizeof line);
     CHECK(!line[0], "edit: an action at its defaults needs no line");
+    uint8_t b_keys[8];
+    CHECK(input_map_keys_of(&mp, B_B, b_keys, 8) == 2 && b_keys[0] == KEY_LSHIFT && b_keys[1] == KEY_MOUSE_X1,
+          "edit: B's two key cells are Left Shift and the back side button");
     CHECK(input_map_set_key(&mp, B_A, 0, KEY_F) == B_ZR, "edit: F taken from ZR");
     input_map_line(&mp, B_A, line, sizeof line);
     CHECK(!strcmp(line, "key:f, pad:default"), "edit: A's line is key:f, pad:default");
