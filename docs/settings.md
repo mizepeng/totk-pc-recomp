@@ -45,10 +45,11 @@ Many rows below are developer tools that only act together with another setting 
 
 | Setting | What it does | Effect of changing it | Safety |
 | --- | --- | --- | --- |
-| `dump` | Frame number to dump: every render pass target and storage image of that frame is copied out as PNG, with `passes.txt` and `images.txt`. | Writes many PNG files and shader hashes to disk and slows the dumped frame; size is capped by the dump code. | Caution |
+| `dump` | Frame number to dump: every render pass target and storage image of that frame is copied out as PNG, with `passes.txt` and `images.txt`. `f8` dumps the second frame after F8 is pressed in the game window instead, once per run, for a glitch that appears only after something in the game. | Writes many PNG files and shader hashes to disk and slows the dumped frame; size is capped by the dump code. While armed, chunked replay is off and each draw takes the dump lock. With `f8`, F8 also triggers the flight recorder when that is on. | Caution |
 | `dump_buf` | `<addr>:<size>[:<off>:<stride>:<w>:<h>]` snapshots one GPU buffer range after every logged pass of a dump. | Writes `buf_<pass>.bin` files and `bufs.txt`; has no effect without `dump`. | Caution |
 | `dump_dir` (default `dump`) | Folder that receives the frame dump files. | Only moves the output. | Safe |
 | `dump_log` | Frame number; logs the frames from there up to the dumped frame into `passes.txt`, with PNGs only of targets up to 64K texels. | Writes a longer `passes.txt` and more PNGs; has no effect without `dump`. | Caution |
+| `dump_skip_runs` | `1` logs but does not copy a render pass whose targets are the same as the pass before it, so the PNG cap is not spent on the G-buffer passes and later passes still get their images. | Fewer PNGs; has no effect without `dump`. | Safe |
 | `flight_at` | Comma-separated frame numbers that trigger a flight-recorder dump. | Writes a dump folder when each frame is reached; has no effect unless the flight recorder (`TOTK_FLIGHT=1`) is on. | Caution |
 | `flight_dir` | Folder for flight-recorder dumps; the default is `flight` beside the folder of `totk.exe`. | Only moves the output. | Safe |
 | `flight_frames` (default `600`) | Number of presents the flight recorder keeps. | A larger ring keeps more history and more thumbnails in memory; has no effect unless `TOTK_FLIGHT=1`. | Caution |

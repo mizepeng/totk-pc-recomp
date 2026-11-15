@@ -1,3 +1,5 @@
+// TOTK_DUMP=f8 定帧改为按键：游戏中按 F8 后转储第二帧（vk_dump_present），每次运行一次。
+// 渲染目标的清除（ClearColor / ClearDepthStencil）也写进 passes.txt，记为 "clear in pass N"。
 // TOTK_DUMP=<frame>: a frame dump for the Vulkan back end, which RenderDoc cannot capture (it hides
 // VK_EXT_external_memory_host). Between presents frame-1 and frame, the replay's command buffers also copy, after each
 // render pass, its colour and depth targets and, after each dispatch, the storage images it writes into host buffers;
@@ -31,6 +33,7 @@
 
 #include "cfg.h"
 #include "host.h"
+#include "input.h"
 #include "nvn_api.h"
 #include "vk.h"
 #include "vk_exec.h"
@@ -45,6 +48,8 @@
 
 int vk_dump_armed;
 static uint64_t dump_frame, log_from;   // log_from: TOTK_DUMP_LOG, first frame logged to passes.txt without images
+// TOTK_DUMP=f8 的状态：0 不用按键，1 等待 F8，2 已按下（dump_frame 已定，每次运行只转储一次）。
+static int dump_on_key;
 static char dir[400];
 static FILE *passes_f, *images_f;
 static int seq, finished, copied;      // copied: passes and dispatches of the dump frame whose images were copied
@@ -820,7 +825,6 @@ static void region_desc(const NVNcopyRegion *r, char *buf, size_t n) {
 }
 
 void vk_dump_copy(VkExec *ex, uint32_t op, const void *payload) {
-    (void)ex;
     plat_mutex_lock(&rec_lock);
     if (!active()) goto out;
     char a[96], b[96], ra[64], rb[64];
@@ -854,6 +858,23 @@ void vk_dump_copy(VkExec *ex, uint32_t op, const void *payload) {
                 ra, p->mask);
         break;
     }
+    // 渲染目标的清除（ClearColor / ClearDepthStencil）记在下一个结束的 pass（编号 seq）名下：
+    // 用来判断一个 pass 读到的目标在本帧是否先被清过。
+    case OP_CLEAR_COLOR: {
+        const p_clear_color *p = payload;
+        const VkExecTarget *t = p->index >= 0 && p->index < 8 ? &ex->color[p->index] : NULL;
+        fprintf(passes_f, "clear in pass %d: colour %d %s mask %#x value %g %g %g %g%s\n", seq, p->index,
+                t && t->tex ? tex_desc(t->tex, a, sizeof a) : "(none)", p->mask, p->rgba[0], p->rgba[1], p->rgba[2],
+                p->rgba[3], ex->render_disabled ? " (render disabled: skipped)" : "");
+        break;
+    }
+    case OP_CLEAR_DS: {
+        const p_clear_ds *p = payload;
+        fprintf(passes_f, "clear in pass %d: depth %s depth %g mask %d stencil %d mask %#x%s\n", seq,
+                ex->depth.tex ? tex_desc(ex->depth.tex, a, sizeof a) : "(none)", p->depth, p->depth_mask, p->stencil,
+                p->stencil_mask, ex->render_disabled ? " (render disabled: skipped)" : "");
+        break;
+    }
     default: break;
     }
 out:
@@ -864,7 +885,15 @@ static void make_dirs(char *path) { plat_file_mkdir_p(path); }
 
 void vk_dump_init(void) {
     const char *e = cfg_get("TOTK_DUMP");
-    if (!e || !*e || !(dump_frame = strtoull(e, NULL, 10))) return;
+    if (!e || !*e) return;
+    // TOTK_DUMP=f8：先不定帧号，玩家看到画面出错时按 F8，转储按键之后的第二帧（vk_dump_present）。
+    // 用于只在游戏里某个操作之后才出现、帧号无法事先知道的花屏。
+    if ((e[0] == 'f' || e[0] == 'F') && e[1] == '8' && !e[2]) {
+        dump_on_key = 1;
+        dump_frame = UINT64_MAX;
+    } else if (!(dump_frame = strtoull(e, NULL, 10))) {
+        return;
+    }
     const char *lf = cfg_get("TOTK_DUMP_LOG");
     if (lf && *lf) log_from = strtoull(lf, NULL, 10);
     const char *sr = cfg_get("TOTK_DUMP_SKIP_RUNS");
@@ -903,10 +932,21 @@ void vk_dump_init(void) {
         if (bd_size && !(bufs_f = fopen(path, "w"))) bd_size = 0;
     }
     vk_dump_armed = 1;
-    rt_log("vk_dump: frame %llu goes to %s", (unsigned long long)dump_frame, dir);
+    if (dump_on_key) rt_log("vk_dump: the frame after F8 goes to %s (one dump per run)", dir);
+    else rt_log("vk_dump: frame %llu goes to %s", (unsigned long long)dump_frame, dir);
 }
 
 void vk_dump_present(uint64_t frame) {
+    // 按键模式：每次 present 查一次 F8（窗口在前台时）。录制线程可能已经在录下一帧，所以定在 frame + 2，
+    // 保证被转储的那一帧从第一个 pass 起就在转储范围内。写 dump_frame 时持有 rec_lock，与录制线程的 active() 互斥。
+    if (dump_on_key == 1 && input_flight_key()) {
+        plat_mutex_lock(&rec_lock);
+        dump_frame = frame + 2;
+        dump_on_key = 2;
+        plat_mutex_unlock(&rec_lock);
+        rt_log("vk_dump: F8 at frame %llu: frame %llu goes to %s", (unsigned long long)frame,
+               (unsigned long long)dump_frame, dir);
+    }
     if (frame != dump_frame) return;
     plat_mutex_lock(&rec_lock);
     finished = 1;

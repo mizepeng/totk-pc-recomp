@@ -1031,8 +1031,12 @@ static int walk(VkExec *ex, const op_hdr *h, int depth, const op_hdr *stop) {
             walk(ex, nvn_op_first(((const p_jump *)a)->target), depth + 1, NULL);
             break;
         case OP_SET_RT: set_rt(ex, a); break;
-        case OP_CLEAR_COLOR: clear_color(ex, a); break;
-        case OP_CLEAR_DS: clear_ds(ex, a); break;
+        case OP_CLEAR_COLOR: case OP_CLEAR_DS:
+            if (h->op == OP_CLEAR_COLOR) clear_color(ex, a);
+            else clear_ds(ex, a);
+            // 转储里记下渲染目标的清除：clear_color / clear_ds 已解析目标，日志能写出被清的是哪张图
+            if (vk_dump_armed) vk_dump_copy(ex, h->op, a);
+            break;
         case OP_BARRIER: vk_exec_barrier(ex); break;
         case OP_DRAW: case OP_DRAW_IDX: case OP_DISPATCH: case OP_UPDATE_UB: case OP_DRAW_IDX_IND: case OP_DISPATCH_IND:
             if (h->op == OP_DRAW || h->op == OP_DRAW_IDX || h->op == OP_DRAW_IDX_IND) ex->fr.draws_seen++, ex->split_draws++;
