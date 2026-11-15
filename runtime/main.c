@@ -596,7 +596,7 @@ static int probe_crash(int null) {
 }
 
 static int usage(const char *argv0) {
-    fprintf(stderr, "usage: %s [--exefs DIR] [--romfs DIR] [--profile DIR] [--selftest | --probe-loader | "
+    fprintf(stderr, "usage: %s [--console] [--exefs DIR] [--romfs DIR] [--profile DIR] [--selftest | --probe-loader | "
                     "--probe-cfg | --probe-dpi | --probe-mods | --probe-playtime | --probe-kernel | --probe-ipc | --probe-services | --probe-fs | --probe-gfx-abi | "
                     "--probe-nvn | --probe-nvn-tex | --probe-window | --probe-shader | --probe-vkmem | "
                     "--probe-vkexec | --probe-astc | --probe-movie | --probe-crash-call | --probe-crash-null | --probe-discord | "
@@ -637,13 +637,22 @@ static void portable_paths(RtConfig *c) {
 }
 
 int main(int argc, char **argv) {
+    // --console：显示控制台并实时输出日志。不带它时，旧系统为本进程新开的控制台在 mem_init 之前就关掉，窗口只闪一下；
+    // Windows 11 24H2 及以后 totk.manifest 让系统根本不开。从终端启动时共用终端的控制台，不受影响。
+    int console = 0;
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--console")) console = 1;
+    int dropped = console ? 0 : plat_console_drop_own();
     mem_init();   // first: claim the guest address space before anything else can land there; reads totk.ini
+    int shown = plat_console_streams(console);
     // The build that wrote the log, at its top: an attached log from another install or version shows at a glance.
     rt_log("version: TotK Recomp %s, game %d.%d.%d", rt_port_version, rt_game_version / 100, rt_game_version / 10 % 10,
            rt_game_version % 10);
     // A restart from the settings menu (gfx_present.c gfx_window_closed) starts this process while the one it replaces
     // is still exiting: its log, RomFS and saves are free once it is gone.
     if (plat_restart_wait(30000) < 0) rt_log("restart: the previous process still runs after 30 s; starting anyway");
+    if (dropped < 0) rt_log("console: FreeConsole failed, the console window opened for this process stays");
+    if (shown < 0) rt_log("console: --console could not open a console or connect stdout and stderr to it");
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     plat_crash_hook(crash_handler);
@@ -689,6 +698,9 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--shot")) {
             if (++i == argc) return usage(argv[0]);
             cfg.shot = argv[i];
+        } else if (!strcmp(argv[i], "--console")) {
+            // 已在 main 开头处理，不算运行模式
+            continue;
         } else if (!mode && !strncmp(argv[i], "--", 2)) {
             mode = argv[i];
         } else {

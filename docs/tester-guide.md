@@ -29,6 +29,12 @@ Every run writes its log to `logs\totk.log` next to `totk.exe`; the four runs be
 `totk.4.log`, and Open log folder in the settings menu's Advanced tab (F1) shows them. Copy the log before you start the
 game again. A file stops at 64 MiB. Started with `2> file`, the game writes its log to that file instead.
 
+Started from Explorer or a shortcut, the game opens no console window. To watch the log live, add `--console` at the
+end of the shortcut's Target (`"...\totk.exe" --console`): the game then opens a console and prints the log there as
+well as to `logs\totk.log`. Started from a terminal (`cmd.exe`, PowerShell, Windows Terminal), it prints to that
+terminal as before, with or without `--console`. Windows 11 24H2 and later open no window at all; older Windows
+shows one for a moment at start.
+
 From `cmd.exe` in the repository root, with the validation layer on:
 
 ```bat

@@ -1424,6 +1424,14 @@ int plat_os_version(char *out, size_t cap) {
 
 int plat_is_wine(void) { return 0; }
 
+// Linux 上的终端由启动方决定，进程自己不开也不关
+int plat_console_drop_own(void) { return 0; }
+
+int plat_console_streams(int show) {
+    (void)show;
+    return 0;
+}
+
 int plat_stderr_path(char *out, size_t cap) {
     struct stat st;
     if (fstat(2, &st) || !S_ISREG(st.st_mode)) return 0;

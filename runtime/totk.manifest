@@ -19,6 +19,11 @@
       <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
       <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+      <!-- consoleAllocationPolicy detached（Windows 11 24H2 及以后生效，旧系统忽略）：控制台程序 totk.exe 从资源管理器或
+           快捷方式启动时不分配控制台窗口；从终端启动时共用终端的控制台，shell 照常等它退出并拿到退出码。旧系统上由
+           main.c 关掉系统给它新开的控制台，命令行带 console 参数时保留（platform/win32.c plat_console_drop_own）。
+           XML 注释里不能出现两个连续的减号，否则清单解析失败、程序无法启动，所以这里不写参数原文。 -->
+      <consoleAllocationPolicy xmlns="http://schemas.microsoft.com/SMI/2024/WindowsSettings">detached</consoleAllocationPolicy>
     </windowsSettings>
   </application>
 </assembly>

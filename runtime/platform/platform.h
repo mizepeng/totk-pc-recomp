@@ -396,6 +396,17 @@ int plat_os_version(char *out, size_t cap);
 int plat_is_wine(void);                                   // 1 when the Windows build runs under Wine; 0 elsewhere
 // The file the process's stderr (the log) goes to, as a UTF-8 path; 0 when stderr is not a file (a console, a pipe).
 int plat_stderr_path(char *out, size_t cap);
+// 控制台窗口（Windows）。totk.exe 是控制台程序，totk.manifest 的 consoleAllocationPolicy=detached 让 Windows 11 24H2
+// 及以后从资源管理器或快捷方式启动时不分配控制台，从终端启动时照常共用终端的控制台。
+// plat_console_drop_own：旧系统仍会给它新开一个控制台；控制台上只有本进程时（不是从终端启动的）脱离并关掉它。
+// 只调用 Win32，不打开文件、不分配内存，所以能在 mem_init 之前调用，让窗口尽早消失。
+// 返回 1 表示关掉了，0 表示没有要关的，-1 表示 FreeConsole 失败。
+// plat_console_streams：mem_init 之后调用。show（命令行参数 --console）时没有控制台就新开一个，并把原本没有去处的
+// stdout/stderr 接到它上面；plat_console_drop_own 关掉控制台后，原来指向它的 stdout/stderr 改指 NUL，
+// 不再写进已失效的句柄。重定向到文件或管道的 stdout/stderr 不动。
+// 返回 1 表示新开了控制台，0 表示不需要，-1 表示 AllocConsole 或改接失败。Linux 上两者都返回 0。
+int plat_console_drop_own(void);
+int plat_console_streams(int show);
 
 // ---- desktop: the in-game menu's "Copy system info" and "Open log folder"
 int plat_clipboard_set(const char *utf8);                 // replaces the clipboard's text; 1 on success

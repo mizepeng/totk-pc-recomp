@@ -1519,6 +1519,58 @@ int plat_stderr_path(char *out, size_t cap) {
     return WideCharToMultiByte(CP_UTF8, 0, p, -1, out, (int)cap, NULL, NULL) != 0;
 }
 
+// ---- console
+
+// plat_console_drop_own 关掉控制台之前，stdout（位 0）和 stderr（位 1）中哪些指向它。
+static int console_dropped;
+
+// 句柄 h 是否是控制台句柄：重定向到文件或管道的句柄上 GetConsoleMode 会失败。
+static int is_console_handle(HANDLE h) {
+    DWORD mode;
+    return h && h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode);
+}
+
+int plat_console_drop_own(void) {
+    DWORD ids[2];
+    // 没有控制台时返回 0；从终端启动时终端的 shell 也挂在这个控制台上，数量至少是 2。
+    if (GetConsoleProcessList(ids, 2) != 1) return 0;
+    int dropped = (is_console_handle(GetStdHandle(STD_OUTPUT_HANDLE)) ? 1 : 0) |
+                  (is_console_handle(GetStdHandle(STD_ERROR_HANDLE)) ? 2 : 0);
+    int dropped_in = is_console_handle(GetStdHandle(STD_INPUT_HANDLE));
+    if (!FreeConsole()) return -1;
+    console_dropped = dropped;
+    // 进程参数里的标准句柄仍是已失效的控制台句柄，清掉它们：子进程（plat_reexec、plat_restart）会继承这些值，
+    // 而失效的句柄值以后可能被别的内核对象复用。
+    if (dropped_in) SetStdHandle(STD_INPUT_HANDLE, NULL);
+    if (dropped & 1) SetStdHandle(STD_OUTPUT_HANDLE, NULL);
+    if (dropped & 2) SetStdHandle(STD_ERROR_HANDLE, NULL);
+    return 1;
+}
+
+// 把 stream 改接到 path（CONOUT$ 或 NUL）：之后 printf/fwrite 写进新句柄。
+static int console_reopen(FILE *stream, const char *path) {
+    return freopen(path, "w", stream) != NULL;
+}
+
+int plat_console_streams(int show) {
+    if (!show) {
+        int ok = 1;
+        if (console_dropped & 1) ok &= console_reopen(stdout, "NUL");
+        if (console_dropped & 2) ok &= console_reopen(stderr, "NUL");
+        return ok ? 0 : -1;
+    }
+    if (GetConsoleWindow()) return 0;
+    // 启动方给了文件或管道的流保持原样，只有原本没有去处的流接到新控制台。
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE), err = GetStdHandle(STD_ERROR_HANDLE);
+    int bare_out = !out || out == INVALID_HANDLE_VALUE;
+    int bare_err = !err || err == INVALID_HANDLE_VALUE;
+    if (!AllocConsole()) return -1;
+    int ok = 1;
+    if (bare_out) ok &= console_reopen(stdout, "CONOUT$");
+    if (bare_err) ok &= console_reopen(stderr, "CONOUT$");
+    return ok ? 1 : -1;
+}
+
 // ---- desktop
 
 int plat_clipboard_set(const char *utf8) {
