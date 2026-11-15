@@ -1291,6 +1291,18 @@ static void evaluate(VkExec *ex, const VkExecTarget *dst) {
     rec_drain();   // NGX records into the command buffer itself: the recorder thread must have made every call so far
     if (timed) T.cpu_drain += kern_now_ns() - c0;
     if (!e->feat) {
+        // 同一时刻只保留一个 DLSS 特性：新建之前释放其他尺寸的特性（工作图保留），切回那个尺寸时重新创建。
+        // 两个特性同时存在时，评估一个不是最后创建的特性会出错：商店购买页把场景降到 1920x1080 并新建特性，
+        // 关闭后回到 2560x1440 的旧特性，DLSS 输出（转储里 DLSS 那一 pass 的结果）布满横向彩色条纹，输入的光照目标是干净的；
+        // 直到切换 DLSS 模式再新建一个特性才恢复。每个特性一张参数表不能消除它，所以不是参数残留。
+        int others = 0;
+        for (size_t i = 0; i < DLSS_SIZES; i++) others |= &D.sizes[i] != e && D.sizes[i].feat;
+        if (others) {
+            // 旧特性可能还在已提交的命令里使用，先等 GPU 空闲（与 free_size 相同）
+            vkDeviceWaitIdle(vk_ctx()->device);
+            for (size_t i = 0; i < DLSS_SIZES; i++)
+                if (&D.sizes[i] != e && D.sizes[i].feat) N.release(D.sizes[i].feat), D.sizes[i].feat = NULL;
+        }
         p_setu(p, "CreationNodeMask", 1);
         p_setu(p, "VisibilityNodeMask", 1);
         p_setu(p, "Width", w);
